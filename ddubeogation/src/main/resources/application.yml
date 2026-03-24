@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: ddubeogation
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2000ms
+  codec:
+    max-in-memory-size: 10MB
+
+server:
+  port: 8080
+
+ddubeogation:
+  anthropic:
+    api-key: ${ANTHROPIC_API_KEY}
+    model: claude-sonnet-4-6
+    max-tokens: 150
+  osrm:
+    base-url: ${OSRM_URL:http://router.project-osrm.org}
+  overpass:
+    base-url: ${OVERPASS_URL:https://overpass-api.de/api}
+  elevation:
+    base-url: ${ELEVATION_URL:https://api.open-elevation.com/api/v1}
+  cache:
+    guidance-ttl-seconds: 3600
+
+logging:
+  level:
+    com.ddubeogation: DEBUG
