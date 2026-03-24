@@ -38,6 +38,59 @@ export OVERPASS_URL=https://overpass-api.de/api      # OSM POI queries
 export ELEVATION_URL=https://api.open-elevation.com/api/v1
 ```
 
+## Frontend (Demo UI)
+
+Located at `../frontend/` (sibling of this `ddubeogation/` directory).
+
+**Stack:** Vite + React 18 + TypeScript + Tailwind CSS + Leaflet
+
+```bash
+cd ../frontend
+npm install
+npm run dev      # http://localhost:5173
+npm run build    # production build
+```
+
+> Vite dev server proxies `/api` → `http://localhost:8080` so the backend must be running on port 8080.
+
+### Frontend Structure
+
+```
+frontend/src/
+├── api/navigation.ts         # API client (startNavigation, updateNavigation, endNavigation, getAudioVector)
+├── types/navigation.ts       # TypeScript interfaces mirroring Java models
+├── hooks/
+│   ├── useNavigationSession.ts  # 50ms polling loop (setInterval + AbortController)
+│   └── useAudioPolling.ts       # 20ms polling loop for audio vector endpoint
+└── components/
+    ├── NavigationSetup.tsx      # Session lifecycle (sessionId, origin/dest coords, start/end)
+    ├── GpsSimulator.tsx         # Sensor simulation (lat/lon edit, HDOP/bearing/noise sliders, walk toggle)
+    ├── MapView.tsx              # Leaflet map (origin/dest/current markers, position trail polyline)
+    ├── GuidanceDisplay.tsx      # Guidance text (noise-adaptive), step info, arrival banner
+    ├── AudioVectorDisplay.tsx   # SVG compass, pitch bar, pan meter, haptic bar, beep pattern
+    └── PollingControls.tsx      # Start/stop polling, request log (last 5 entries)
+```
+
+### Key Frontend Patterns
+
+- **AbortController on every tick**: The 50ms/20ms intervals abort any in-flight request before starting the next. This prevents request queuing when the backend is slow.
+- **Stale closure prevention**: `getRequest()` callback is stored in a `useRef` and updated each render so the polling `setInterval` always reads the current simulated sensor state.
+- **Walk simulation**: Moves the simulated GPS position toward the destination at 1.4 m/s using Haversine bearing + dead-reckoning. Bearing is auto-computed and fed into IMU `headingDegrees`.
+- **IMU auto-values**: `accelZ = 9.81`, other fields default to 0 so testers don't need to fill all 12 IMU fields.
+- **Noise-adaptive text**: Client mirrors backend thresholds — shows `shortText` at ≥75dB, `"HAPTIC ONLY"` at ≥85dB.
+
+### Testing Scenarios
+
+| Scenario | How to trigger |
+|---|---|
+| Kalman filter (GPS vs IMU) | Set HDOP > 4 → IMU dead reckoning dominates |
+| Map-matching | Set HDOP > 3 → OSRM snaps position to nearest road |
+| Noise adaptation | Drag noise slider past 60/75/85dB thresholds |
+| Off-route recovery | Edit lat/lon to a position > 30m from route |
+| Redis cache hit | Same route, second run → `CACHED` badge appears |
+
+---
+
 ## Architecture
 
 ### Request Pipeline
