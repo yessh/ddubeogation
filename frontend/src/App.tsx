@@ -1,12 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { KakaoMap } from './components/KakaoMap';
 import { GuidanceDisplay } from './components/GuidanceDisplay';
-import { AudioVectorDisplay } from './components/AudioVectorDisplay';
-import { GpsSimulator } from './components/GpsSimulator';
-import { PollingControls } from './components/PollingControls';
 import { LocationInput } from './components/LocationInput';
 import { useNavigationSession } from './hooks/useNavigationSession';
-import { useAudioPolling } from './hooks/useAudioPolling';
 import { useNavigationNotifications } from './hooks/useNavigationNotifications';
 import { useKakaoSdk } from './hooks/useKakaoSdk';
 import { startNavigation, endNavigation } from './api/navigation';
@@ -89,7 +85,6 @@ export default function App() {
   const [routeLoading, setRouteLoading] = useState(false);
   const [status, setStatus] = useState<SessionStatus>('idle');
   const [simState, setSimState] = useState<SimState>(DEFAULT_SIM_STATE);
-  const [showDev, setShowDev] = useState(false);
   const [gpsPosition, setGpsPosition] = useState<[number, number] | null>(null);
   const [gpsAccuracy, setGpsAccuracy] = useState(0);
   const gpsInitRef = useRef(false);
@@ -223,12 +218,8 @@ export default function App() {
   }, [sessionId]);
 
   const isSessionActive = status === 'active';
-  const { lastResponse, isPolling: isNavPolling, startPolling, stopPolling, log: navLog, addLog } =
+  const { lastResponse, startPolling, stopPolling } =
     useNavigationSession(sessionId, getRequest, isSessionActive);
-
-  const targetBearing = lastResponse?.currentStep?.targetBearing ?? 0;
-  const { audioVector, isPolling: isAudioPolling, startPolling: startAudio, stopPolling: stopAudio } =
-    useAudioPolling(simState.headBearing, targetBearing, simState.ambientNoiseDb, true);
 
   useNavigationNotifications(lastResponse ?? null);
 
@@ -303,14 +294,12 @@ export default function App() {
     });
     setSimState((prev) => ({ ...prev, lat: origin[0], lon: origin[1] }));
     setStatus('active');
-    addLog({ timestamp: Date.now(), type: 'start', durationMs: 0, status: 200 });
   };
 
   const handleEnd = async () => {
     await endNavigation(sessionId);
     setStatus('idle');
     stopPolling();
-    addLog({ timestamp: Date.now(), type: 'end', durationMs: 0, status: 204 });
   };
 
   const handleReset = () => {
@@ -324,7 +313,6 @@ export default function App() {
   };
 
   const canStart = !!origin && !!destination && status === 'idle';
-  const allLogs = [...navLog].sort((a, b) => b.timestamp - a.timestamp).slice(0, 5);
 
   return (
     <div className="fixed inset-0 flex flex-col bg-gray-900 overflow-hidden">
@@ -358,13 +346,6 @@ export default function App() {
                 초기화
               </button>
             )}
-            <button
-              onClick={() => setShowDev((v) => !v)}
-              className={`text-xs px-2 py-1 rounded transition-colors ${showDev ? 'text-white bg-blue-600/60' : 'text-gray-400 hover:text-white bg-gray-700/60'}`}
-              title="개발자 도구"
-            >
-              ⚙️
-            </button>
           </div>
         </div>
 
@@ -462,29 +443,11 @@ export default function App() {
       {(status === 'active' || status === 'arrived') && lastResponse && (
         <div className="absolute bottom-0 left-0 right-0 z-10 pointer-events-none">
           <div className="mx-3 mb-3 pointer-events-auto">
-            <GuidanceDisplay response={lastResponse} noiseDb={simState.ambientNoiseDb} />
+            <GuidanceDisplay response={lastResponse} />
           </div>
         </div>
       )}
 
-      {/* ── Developer panel (collapsible, bottom-right corner) ── */}
-      {showDev && (
-        <div className="absolute bottom-4 right-4 z-20 w-80 max-h-[70vh] overflow-y-auto space-y-3 pointer-events-auto">
-          <GpsSimulator simState={simState} setSimState={setSimState} />
-          <AudioVectorDisplay
-            audioVector={audioVector}
-            navAudio={lastResponse?.audioDirective ?? null}
-          />
-          <PollingControls
-            isNavPolling={isNavPolling}
-            isAudioPolling={isAudioPolling}
-            navEnabled={isSessionActive}
-            onToggleNav={isNavPolling ? stopPolling : startPolling}
-            onToggleAudio={isAudioPolling ? stopAudio : startAudio}
-            log={allLogs}
-          />
-        </div>
-      )}
     </div>
   );
 }
