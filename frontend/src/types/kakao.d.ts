@@ -93,10 +93,46 @@ declare namespace kakao.maps {
         callback: (result: CoordResult[], status: Status) => void
       ): void;
     }
+    class Places {
+      keywordSearch(
+        keyword: string,
+        callback: (result: PlaceResult[], status: Status, pagination: Pagination) => void,
+        options?: PlaceSearchOptions
+      ): void;
+    }
     type Status = 'OK' | 'ZERO_RESULT' | 'ERROR';
     interface CoordResult {
       address: { address_name: string };
       road_address: { address_name: string } | null;
+    }
+    interface PlaceResult {
+      id: string;
+      place_name: string;
+      category_name: string;
+      address_name: string;
+      road_address_name: string;
+      x: string; // longitude
+      y: string; // latitude
+      phone: string;
+      place_url: string;
+      distance: string;
+    }
+    interface Pagination {
+      totalCount: number;
+      hasNextPage: boolean;
+      hasPrevPage: boolean;
+      gotoPage(page: number): void;
+      nextPage(): void;
+      prevPage(): void;
+    }
+    interface PlaceSearchOptions {
+      location?: LatLng;
+      radius?: number;
+      bounds?: LatLngBounds;
+      category_group_code?: string;
+      page?: number;
+      size?: number;
+      sort?: 'accuracy' | 'distance';
     }
   }
 }

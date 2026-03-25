@@ -171,7 +171,7 @@ public class KalmanGpsFilterService {
         // 초기 공분산은 항등행렬 — 이후 KF 내부에서 갱신됨
         KalmanFilter kf = filterMap.get(sessionId);
         if (kf == null) return MatrixUtils.createRealIdentityMatrix(4);
-        return kf.getErrorCovariance();
+        return MatrixUtils.createRealMatrix(kf.getErrorCovariance());
     }
 
     public void clearSession(String sessionId) {

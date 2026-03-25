@@ -13,9 +13,9 @@ server:
   port: 8080
 
 ddubeogation:
-  anthropic:
-    api-key: ${ANTHROPIC_API_KEY}
-    model: claude-sonnet-4-6
+  gemini:
+    api-key: ${GEMINI_API_KEY}
+    model: gemini-2.0-flash
     max-tokens: 150
   osrm:
     base-url: ${OSRM_URL:http://router.project-osrm.org}

@@ -1,6 +1,6 @@
 package com.ddubeogation.service;
 
-import com.ddubeogation.client.AnthropicClient;
+import com.ddubeogation.client.GeminiClient;
 import com.ddubeogation.model.GuidanceScript;
 import com.ddubeogation.model.NavigationContext;
 import lombok.RequiredArgsConstructor;
@@ -23,7 +23,7 @@ import java.time.Duration;
 @RequiredArgsConstructor
 public class GuidanceGenerationService {
 
-    private final AnthropicClient                 anthropicClient;
+    private final GeminiClient geminiClient;
     private final ReactiveStringRedisTemplate     redis;
 
     private static final String CACHE_PREFIX = "guidance:";
@@ -64,7 +64,7 @@ public class GuidanceGenerationService {
     private Mono<GuidanceScript> callLlm(NavigationContext ctx, String cacheKey) {
         String userPrompt = buildUserPrompt(ctx);
 
-        return anthropicClient.complete(SYSTEM_PROMPT, userPrompt)
+        return geminiClient.complete(SYSTEM_PROMPT, userPrompt)
             .map(response -> parseScript(response, cacheKey, false))
             .flatMap(script -> {
                 // 캐시 저장 (소음이나 특수 상황이 아닌 일반 구간만)

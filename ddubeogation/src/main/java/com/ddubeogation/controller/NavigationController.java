@@ -30,16 +30,16 @@ public class NavigationController {
             @RequestBody StartRequest req) {
 
         GpsPoint origin = GpsPoint.builder()
-            .latitude(req.getOriginLat())
-            .longitude(req.getOriginLon())
+            .latitude(req.originLat())
+            .longitude(req.originLon())
             .build();
         GpsPoint dest = GpsPoint.builder()
-            .latitude(req.getDestLat())
-            .longitude(req.getDestLon())
+            .latitude(req.destLat())
+            .longitude(req.destLon())
             .build();
 
-        return routeService.initRoute(req.getSessionId(), origin, dest)
-            .thenReturn(ResponseEntity.ok("Navigation started: " + req.getSessionId()));
+        return routeService.initRoute(req.sessionId(), origin, dest)
+            .thenReturn(ResponseEntity.ok("Navigation started: " + req.sessionId()));
     }
 
     /**

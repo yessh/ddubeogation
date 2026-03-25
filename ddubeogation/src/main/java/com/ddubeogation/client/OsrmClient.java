@@ -111,17 +111,15 @@ public class OsrmClient {
             for (Object s : stepsList) {
                 Map<?, ?> step = (Map<?, ?>) s;
                 Map<?, ?> maneuver = (Map<?, ?>) step.get("maneuver");
-                String type = (String) maneuver.getOrDefault("type", "straight");
-                String modifier = (String) maneuver.getOrDefault("modifier", "");
+                String type     = maneuver.get("type")     instanceof String t ? t : "straight";
+                String modifier = maneuver.get("modifier") instanceof String m ? m : "";
                 String direction = resolveDirection(type, modifier);
 
                 double bearing = toDouble(maneuver.get("bearing_after"));
                 double dist    = toDouble(step.get("distance"));
-                String name    = (String) step.getOrDefault("name", "");
+                String name    = step.get("name") instanceof String n ? n : "";
 
-                List<?> loc = (List<?>) ((Map<?, ?>) maneuver.get("location")).containsKey("coordinates")
-                    ? (List<?>) ((Map<?, ?>) maneuver.get("location")).get("coordinates")
-                    : List.of(0.0, 0.0);
+                List<?> loc = maneuver.get("location") instanceof List<?> l ? l : List.of(0.0, 0.0);
 
                 GpsPoint startPt = GpsPoint.builder()
                     .longitude(toDouble(loc.get(0)))

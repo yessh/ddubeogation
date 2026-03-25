@@ -1,0 +1,26 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Build
+build/
+out/
+dist/
+.gradle/
+bin/
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+*.log
+
+# AI Agents
+.anthropic/
+.gemini/
+brain/

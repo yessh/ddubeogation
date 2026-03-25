@@ -81,8 +81,8 @@ public class OverpassClient {
             String name = (String) tags.getOrDefault("name", null);
             if (name == null) name = resolveDefaultName(tags);
 
-            String amenity = (String) tags.getOrDefault("amenity", "");
-            String shop    = (String) tags.getOrDefault("shop", "");
+            String amenity = tags.get("amenity") instanceof String a ? a : "";
+            String shop    = tags.get("shop")    instanceof String s ? s : "";
             String category = amenity.isBlank() ? shop : amenity;
 
             double lat = toDouble(node.get("lat"));
@@ -105,9 +105,9 @@ public class OverpassClient {
      * 예: "convenience" → "편의점"
      */
     private String resolveDefaultName(Map<?, ?> tags) {
-        String amenity = (String) tags.getOrDefault("amenity", "");
-        String shop    = (String) tags.getOrDefault("shop", "");
-        String brand   = (String) tags.getOrDefault("brand", "");
+        String amenity = tags.get("amenity") instanceof String a ? a : "";
+        String shop    = tags.get("shop")    instanceof String s ? s : "";
+        String brand   = tags.get("brand")   instanceof String b ? b : "";
 
         if (!brand.isBlank()) return brand;
         return switch (amenity.isBlank() ? shop : amenity) {

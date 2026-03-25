@@ -4,9 +4,11 @@ import { GuidanceDisplay } from './components/GuidanceDisplay';
 import { AudioVectorDisplay } from './components/AudioVectorDisplay';
 import { GpsSimulator } from './components/GpsSimulator';
 import { PollingControls } from './components/PollingControls';
+import { LocationInput } from './components/LocationInput';
 import { useNavigationSession } from './hooks/useNavigationSession';
 import { useAudioPolling } from './hooks/useAudioPolling';
 import { useNavigationNotifications } from './hooks/useNavigationNotifications';
+import { useKakaoSdk } from './hooks/useKakaoSdk';
 import { startNavigation, endNavigation } from './api/navigation';
 import { fetchRoute } from './api/directions';
 import type { NavigationRequest, SessionStatus, SimState } from './types/navigation';
@@ -76,17 +78,20 @@ const statusLabel: Record<SessionStatus, string> = {
 type PickMode = 'origin' | 'destination' | null;
 
 export default function App() {
+  const sdkLoaded = useKakaoSdk();
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID());
   const [origin, setOrigin] = useState<[number, number] | null>(null);
   const [originAddress, setOriginAddress] = useState('');
   const [destination, setDestination] = useState<[number, number] | null>(null);
   const [destAddress, setDestAddress] = useState('');
-  const [pickMode, setPickMode] = useState<PickMode>('origin');
+  const [pickMode, setPickMode] = useState<PickMode>(null);
   const [routeData, setRouteData] = useState<DirectionResult | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [status, setStatus] = useState<SessionStatus>('idle');
   const [simState, setSimState] = useState<SimState>(DEFAULT_SIM_STATE);
   const [showDev, setShowDev] = useState(false);
+  const [gpsLoading, setGpsLoading] = useState(false);
+  const gpsInitRef = useRef(false);
 
   // suppress unused-var warning on setSessionId while keeping reset capability
   void setSessionId;
@@ -95,6 +100,48 @@ export default function App() {
   useEffect(() => {
     if (destination) destRef.current = { lat: destination[0], lon: destination[1] };
   }, [destination]);
+
+  // GPS: get current position and reverse-geocode to set origin
+  const doGetGPS = useCallback(() => {
+    if (!navigator.geolocation) return;
+    setGpsLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        try {
+          const geocoder = new kakao.maps.services.Geocoder();
+          geocoder.coord2Address(lon, lat, (results, gStatus) => {
+            setGpsLoading(false);
+            let address = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+            if (gStatus === 'OK' && results[0]) {
+              address =
+                results[0].road_address?.address_name ??
+                results[0].address.address_name;
+            }
+            setOrigin([lat, lon]);
+            setOriginAddress(address);
+            setPickMode(null);
+          });
+        } catch {
+          setGpsLoading(false);
+          setOrigin([lat, lon]);
+          setOriginAddress(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+          setPickMode(null);
+        }
+      },
+      () => setGpsLoading(false),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }, []);
+
+  // Auto-run GPS on first SDK load
+  useEffect(() => {
+    if (sdkLoaded && !gpsInitRef.current) {
+      gpsInitRef.current = true;
+      doGetGPS();
+    }
+  }, [sdkLoaded, doGetGPS]);
 
   const simStateRef = useRef(simState);
   useEffect(() => { simStateRef.current = simState; }, [simState]);
@@ -174,12 +221,38 @@ export default function App() {
     }
   }, []);
 
+  // Called when user selects origin via search or GPS
+  const handleSelectOrigin = useCallback(
+    (lat: number, lon: number, address: string) => {
+      const newOrigin: [number, number] = [lat, lon];
+      setOrigin(newOrigin);
+      setOriginAddress(address);
+      setPickMode(null);
+      setRouteData(null);
+      if (destination) void doFetchRoute(newOrigin, destination);
+    },
+    [destination, doFetchRoute]
+  );
+
+  // Called when user selects destination via search
+  const handleSelectDestination = useCallback(
+    (lat: number, lon: number, address: string) => {
+      const newDest: [number, number] = [lat, lon];
+      setDestination(newDest);
+      setDestAddress(address);
+      setPickMode(null);
+      if (origin) void doFetchRoute(origin, newDest);
+    },
+    [origin, doFetchRoute]
+  );
+
+  // Called when user clicks on the map in pick mode
   const handleLocationPicked = useCallback(
     (lat: number, lon: number, address: string) => {
       if (pickMode === 'origin') {
         setOrigin([lat, lon]);
         setOriginAddress(address);
-        setPickMode('destination');
+        setPickMode('destination'); // auto-advance to destination pick
         setRouteData(null);
       } else if (pickMode === 'destination') {
         const newDest: [number, number] = [lat, lon];
@@ -269,24 +342,16 @@ export default function App() {
         {status === 'idle' && (
           <div className="mx-3 mt-2 bg-white/95 rounded-2xl shadow-xl p-3 space-y-2 pointer-events-auto">
             {/* Origin */}
-            <button
-              onClick={() => setPickMode('origin')}
-              className={`flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-left transition-all ${
-                pickMode === 'origin'
-                  ? 'bg-green-50 ring-2 ring-green-500'
-                  : 'bg-gray-50 hover:bg-gray-100'
-              }`}
-            >
-              <span className="w-3 h-3 rounded-full bg-green-500 shrink-0" />
-              <span className={`text-sm truncate ${origin ? 'text-gray-800' : 'text-gray-400'}`}>
-                {origin
-                  ? originAddress || `${origin[0].toFixed(5)}, ${origin[1].toFixed(5)}`
-                  : '출발지를 지도에서 클릭하세요'}
-              </span>
-              {origin && pickMode !== 'origin' && (
-                <span className="ml-auto text-xs text-green-600 font-medium shrink-0">변경</span>
-              )}
-            </button>
+            <LocationInput
+              label="출발지"
+              color="green"
+              value={originAddress}
+              isPickMode={pickMode === 'origin'}
+              onActivatePickMode={() => setPickMode('origin')}
+              onSelect={handleSelectOrigin}
+              onGetGPS={doGetGPS}
+              gpsLoading={gpsLoading}
+            />
 
             {/* Divider */}
             <div className="flex items-center gap-3 px-3">
@@ -297,29 +362,14 @@ export default function App() {
             </div>
 
             {/* Destination */}
-            <button
-              onClick={() => origin && setPickMode('destination')}
-              disabled={!origin}
-              className={`flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-left transition-all ${
-                pickMode === 'destination'
-                  ? 'bg-red-50 ring-2 ring-red-500'
-                  : !origin
-                  ? 'bg-gray-50 opacity-50 cursor-not-allowed'
-                  : 'bg-gray-50 hover:bg-gray-100'
-              }`}
-            >
-              <span className="w-3 h-3 rounded-full bg-red-500 shrink-0" />
-              <span className={`text-sm truncate ${destination ? 'text-gray-800' : 'text-gray-400'}`}>
-                {destination
-                  ? destAddress || `${destination[0].toFixed(5)}, ${destination[1].toFixed(5)}`
-                  : origin
-                  ? '목적지를 지도에서 클릭하세요'
-                  : '출발지를 먼저 선택하세요'}
-              </span>
-              {destination && pickMode !== 'destination' && (
-                <span className="ml-auto text-xs text-red-600 font-medium shrink-0">변경</span>
-              )}
-            </button>
+            <LocationInput
+              label="목적지"
+              color="red"
+              value={destAddress}
+              isPickMode={pickMode === 'destination'}
+              onActivatePickMode={() => setPickMode('destination')}
+              onSelect={handleSelectDestination}
+            />
 
             {/* Route status */}
             {routeLoading && (
