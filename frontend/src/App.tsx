@@ -90,7 +90,8 @@ export default function App() {
   const [status, setStatus] = useState<SessionStatus>('idle');
   const [simState, setSimState] = useState<SimState>(DEFAULT_SIM_STATE);
   const [showDev, setShowDev] = useState(false);
-  const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsPosition, setGpsPosition] = useState<[number, number] | null>(null);
+  const [gpsAccuracy, setGpsAccuracy] = useState(0);
   const gpsInitRef = useRef(false);
 
   // suppress unused-var warning on setSessionId while keeping reset capability
@@ -101,47 +102,75 @@ export default function App() {
     if (destination) destRef.current = { lat: destination[0], lon: destination[1] };
   }, [destination]);
 
-  // GPS: get current position and reverse-geocode to set origin
-  const doGetGPS = useCallback(() => {
+  // GPS watchPosition: 실시간 위치 추적
+  useEffect(() => {
     if (!navigator.geolocation) return;
-    setGpsLoading(true);
-    navigator.geolocation.getCurrentPosition(
+    const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
-        try {
-          const geocoder = new kakao.maps.services.Geocoder();
-          geocoder.coord2Address(lon, lat, (results, gStatus) => {
-            setGpsLoading(false);
-            let address = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-            if (gStatus === 'OK' && results[0]) {
-              address =
-                results[0].road_address?.address_name ??
-                results[0].address.address_name;
+        const accuracy = pos.coords.accuracy;
+        setGpsPosition([lat, lon]);
+        setGpsAccuracy(accuracy);
+        // 첫 GPS 수신 시 simState 초기화 + 출발지 설정
+        if (!gpsInitRef.current) {
+          gpsInitRef.current = true;
+          setSimState((prev) => ({ ...prev, lat, lon }));
+          if (sdkLoaded) {
+            try {
+              const geocoder = new kakao.maps.services.Geocoder();
+              geocoder.coord2Address(lon, lat, (results, gStatus) => {
+                let address = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+                if (gStatus === 'OK' && results[0]) {
+                  address =
+                    results[0].road_address?.address_name ??
+                    results[0].address.address_name;
+                }
+                setOrigin([lat, lon]);
+                setOriginAddress(address);
+                setPickMode(null);
+              });
+            } catch {
+              setOrigin([lat, lon]);
+              setOriginAddress(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
             }
-            setOrigin([lat, lon]);
-            setOriginAddress(address);
-            setPickMode(null);
-          });
-        } catch {
-          setGpsLoading(false);
-          setOrigin([lat, lon]);
-          setOriginAddress(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
-          setPickMode(null);
+          }
         }
+        // 안내 중이 아닐 때 simState 위치 동기화 (도보 시뮬레이션 중이 아닐 때)
+        setSimState((prev) => {
+          if (prev.simulateWalk) return prev;
+          return { ...prev, lat, lon };
+        });
       },
-      () => setGpsLoading(false),
-      { enableHighAccuracy: true, timeout: 8000 }
+      undefined,
+      { enableHighAccuracy: true, maximumAge: 0 }
     );
-  }, []);
+    return () => navigator.geolocation.clearWatch(watchId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sdkLoaded]);
 
-  // Auto-run GPS on first SDK load
-  useEffect(() => {
-    if (sdkLoaded && !gpsInitRef.current) {
-      gpsInitRef.current = true;
-      doGetGPS();
+  // GPS 버튼: 현재 GPS 위치를 출발지로 설정
+  const doGetGPS = useCallback(() => {
+    if (!gpsPosition || !sdkLoaded) return;
+    const [lat, lon] = gpsPosition;
+    try {
+      const geocoder = new kakao.maps.services.Geocoder();
+      geocoder.coord2Address(lon, lat, (results, gStatus) => {
+        let address = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+        if (gStatus === 'OK' && results[0]) {
+          address =
+            results[0].road_address?.address_name ??
+            results[0].address.address_name;
+        }
+        setOrigin([lat, lon]);
+        setOriginAddress(address);
+        setPickMode(null);
+      });
+    } catch {
+      setOrigin([lat, lon]);
+      setOriginAddress(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
     }
-  }, [sdkLoaded, doGetGPS]);
+  }, [gpsPosition, sdkLoaded]);
 
   const simStateRef = useRef(simState);
   useEffect(() => { simStateRef.current = simState; }, [simState]);
@@ -304,7 +333,8 @@ export default function App() {
         <KakaoMap
           origin={origin}
           destination={destination}
-          currentPosition={lastResponse?.correctedPosition ?? null}
+          gpsPosition={gpsPosition}
+          gpsAccuracy={gpsAccuracy}
           routeVertexes={routeData?.vertexes ?? []}
           pickMode={status === 'idle' ? pickMode : null}
           onLocationPicked={handleLocationPicked}
@@ -350,7 +380,7 @@ export default function App() {
               onActivatePickMode={() => setPickMode('origin')}
               onSelect={handleSelectOrigin}
               onGetGPS={doGetGPS}
-              gpsLoading={gpsLoading}
+              gpsLoading={!gpsPosition}
             />
 
             {/* Divider */}

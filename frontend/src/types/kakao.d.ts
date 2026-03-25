@@ -46,6 +46,19 @@ declare namespace kakao.maps {
     setPath(path: LatLng[]): void;
   }
 
+  class CustomOverlay {
+    constructor(options: CustomOverlayOptions);
+    setMap(map: Map | null): void;
+    setPosition(latlng: LatLng): void;
+  }
+
+  class Circle {
+    constructor(options: CircleOptions);
+    setMap(map: Map | null): void;
+    setPosition(latlng: LatLng): void;
+    setRadius(radius: number): void;
+  }
+
   interface MapMouseEvent {
     latLng: LatLng;
   }
@@ -83,6 +96,27 @@ declare namespace kakao.maps {
     strokeOpacity?: number;
     strokeStyle?: string;
     map?: Map;
+  }
+
+  interface CustomOverlayOptions {
+    position: LatLng;
+    content: string | HTMLElement;
+    map?: Map;
+    zIndex?: number;
+    xAnchor?: number;
+    yAnchor?: number;
+  }
+
+  interface CircleOptions {
+    center: LatLng;
+    radius: number;
+    strokeWeight?: number;
+    strokeColor?: string;
+    strokeOpacity?: number;
+    fillColor?: string;
+    fillOpacity?: number;
+    map?: Map;
+    zIndex?: number;
   }
 
   namespace services {

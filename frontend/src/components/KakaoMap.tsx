@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useKakaoSdk } from '../hooks/useKakaoSdk';
-import type { GpsPoint } from '../types/navigation';
 
 interface Props {
   origin: [number, number] | null;
   destination: [number, number] | null;
-  currentPosition: GpsPoint | null;
+  gpsPosition: [number, number] | null;
+  gpsAccuracy: number;
   routeVertexes: number[];
   pickMode: 'origin' | 'destination' | null;
   onLocationPicked: (lat: number, lon: number, address: string) => void;
@@ -25,12 +25,12 @@ function makeMarkerSvg(color: string, label: string): string {
 
 const ORIGIN_ICON_SRC = makeMarkerSvg('#22c55e', '출');
 const DEST_ICON_SRC = makeMarkerSvg('#ef4444', '도');
-const CUR_ICON_SRC = makeMarkerSvg('#3b82f6', '현');
 
 export const KakaoMap = React.memo(function KakaoMap({
   origin,
   destination,
-  currentPosition,
+  gpsPosition,
+  gpsAccuracy,
   routeVertexes,
   pickMode,
   onLocationPicked,
@@ -42,7 +42,8 @@ export const KakaoMap = React.memo(function KakaoMap({
 
   const originMarkerRef = useRef<kakao.maps.Marker | null>(null);
   const destMarkerRef = useRef<kakao.maps.Marker | null>(null);
-  const curMarkerRef = useRef<kakao.maps.Marker | null>(null);
+  const gpsDotRef = useRef<kakao.maps.CustomOverlay | null>(null);
+  const gpsCircleRef = useRef<kakao.maps.Circle | null>(null);
   const routeLineRef = useRef<kakao.maps.Polyline | null>(null);
   const clickHandlerRef = useRef<((e: kakao.maps.MapMouseEvent) => void) | null>(null);
 
@@ -57,13 +58,12 @@ export const KakaoMap = React.memo(function KakaoMap({
     setMapReady(true);
   }, [sdkLoaded]);
 
-  const makeMarker = useCallback((iconSrc: string, title: string): kakao.maps.MarkerImage => {
+  const makeMarker = useCallback((iconSrc: string): kakao.maps.MarkerImage => {
     return new kakao.maps.MarkerImage(
       iconSrc,
       new kakao.maps.Size(28, 40),
       { offset: new kakao.maps.Point(14, 40) }
     );
-    void title;
   }, []);
 
   // Click handler for pick mode
@@ -124,7 +124,7 @@ export const KakaoMap = React.memo(function KakaoMap({
         originMarkerRef.current = new kakao.maps.Marker({
           position: pos,
           map,
-          image: makeMarker(ORIGIN_ICON_SRC, '출발'),
+          image: makeMarker(ORIGIN_ICON_SRC),
           title: '출발',
           zIndex: 3,
         });
@@ -147,7 +147,7 @@ export const KakaoMap = React.memo(function KakaoMap({
         destMarkerRef.current = new kakao.maps.Marker({
           position: pos,
           map,
-          image: makeMarker(DEST_ICON_SRC, '목적지'),
+          image: makeMarker(DEST_ICON_SRC),
           title: '목적지',
           zIndex: 3,
         });
@@ -158,29 +158,55 @@ export const KakaoMap = React.memo(function KakaoMap({
     }
   }, [destination, mapReady, makeMarker]);
 
-  // Current position marker (auto-pan)
+  // GPS 실시간 위치 (파란 점 + 정확도 원)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    if (currentPosition) {
-      const pos = new kakao.maps.LatLng(currentPosition.latitude, currentPosition.longitude);
-      if (curMarkerRef.current) {
-        curMarkerRef.current.setPosition(pos);
+
+    if (gpsPosition) {
+      const pos = new kakao.maps.LatLng(gpsPosition[0], gpsPosition[1]);
+
+      // 정확도 원
+      const radius = gpsAccuracy > 0 ? gpsAccuracy : 10;
+      if (gpsCircleRef.current) {
+        gpsCircleRef.current.setPosition(pos);
+        gpsCircleRef.current.setRadius(radius);
       } else {
-        curMarkerRef.current = new kakao.maps.Marker({
-          position: pos,
+        gpsCircleRef.current = new kakao.maps.Circle({
+          center: pos,
+          radius,
+          strokeWeight: 1,
+          strokeColor: '#4285f4',
+          strokeOpacity: 0.6,
+          fillColor: '#4285f4',
+          fillOpacity: 0.12,
           map,
-          image: makeMarker(CUR_ICON_SRC, '현재'),
-          title: '현재 위치',
-          zIndex: 5,
         });
       }
+
+      // 파란 점 (CustomOverlay)
+      if (gpsDotRef.current) {
+        gpsDotRef.current.setPosition(pos);
+      } else {
+        const content = '<div class="gps-dot-wrapper"><div class="gps-pulse"></div><div class="gps-dot"></div></div>';
+        gpsDotRef.current = new kakao.maps.CustomOverlay({
+          position: pos,
+          content,
+          map,
+          zIndex: 10,
+          yAnchor: 0.5,
+          xAnchor: 0.5,
+        });
+      }
+
       map.setCenter(pos);
     } else {
-      curMarkerRef.current?.setMap(null);
-      curMarkerRef.current = null;
+      gpsDotRef.current?.setMap(null);
+      gpsDotRef.current = null;
+      gpsCircleRef.current?.setMap(null);
+      gpsCircleRef.current = null;
     }
-  }, [currentPosition, mapReady, makeMarker]);
+  }, [gpsPosition, gpsAccuracy, mapReady]);
 
   // Route polyline
   useEffect(() => {
