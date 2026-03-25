@@ -1,0 +1,410 @@
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { KakaoMap } from './components/KakaoMap';
+import { GuidanceDisplay } from './components/GuidanceDisplay';
+import { AudioVectorDisplay } from './components/AudioVectorDisplay';
+import { GpsSimulator } from './components/GpsSimulator';
+import { PollingControls } from './components/PollingControls';
+import { useNavigationSession } from './hooks/useNavigationSession';
+import { useAudioPolling } from './hooks/useAudioPolling';
+import { useNavigationNotifications } from './hooks/useNavigationNotifications';
+import { startNavigation, endNavigation } from './api/navigation';
+import { fetchRoute } from './api/directions';
+import type { NavigationRequest, SessionStatus, SimState } from './types/navigation';
+import type { DirectionResult } from './api/directions';
+
+function formatDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)}m`;
+  return `${(meters / 1000).toFixed(1)}km`;
+}
+
+function formatDuration(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}분`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins > 0 ? `${hours}시간 ${mins}분` : `${hours}시간`;
+}
+
+function bearingTo(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLon = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+  const x =
+    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+function movePosition(lat: number, lon: number, bearing: number, meters: number): [number, number] {
+  const R = 6371000;
+  const d = meters / R;
+  const brng = (bearing * Math.PI) / 180;
+  const lat1 = (lat * Math.PI) / 180;
+  const lon1 = (lon * Math.PI) / 180;
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng));
+  const lon2 =
+    lon1 + Math.atan2(Math.sin(brng) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+  return [(lat2 * 180) / Math.PI, (lon2 * 180) / Math.PI];
+}
+
+const DEFAULT_SIM_STATE: SimState = {
+  lat: 37.5665,
+  lon: 126.978,
+  altitude: 30,
+  hdop: 1.5,
+  bearing: 0,
+  ambientNoiseDb: 50,
+  headBearing: 0,
+  stepCount: 0,
+  stepLengthMeters: 0.75,
+  simulateWalk: false,
+};
+
+const statusColor: Record<SessionStatus, string> = {
+  idle: 'bg-gray-500',
+  active: 'bg-green-500 animate-pulse',
+  arrived: 'bg-blue-500',
+  error: 'bg-red-500',
+};
+const statusLabel: Record<SessionStatus, string> = {
+  idle: '대기',
+  active: '안내 중',
+  arrived: '도착',
+  error: '오류',
+};
+
+type PickMode = 'origin' | 'destination' | null;
+
+export default function App() {
+  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID());
+  const [origin, setOrigin] = useState<[number, number] | null>(null);
+  const [originAddress, setOriginAddress] = useState('');
+  const [destination, setDestination] = useState<[number, number] | null>(null);
+  const [destAddress, setDestAddress] = useState('');
+  const [pickMode, setPickMode] = useState<PickMode>('origin');
+  const [routeData, setRouteData] = useState<DirectionResult | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [status, setStatus] = useState<SessionStatus>('idle');
+  const [simState, setSimState] = useState<SimState>(DEFAULT_SIM_STATE);
+  const [showDev, setShowDev] = useState(false);
+
+  // suppress unused-var warning on setSessionId while keeping reset capability
+  void setSessionId;
+
+  const destRef = useRef({ lat: 0, lon: 0 });
+  useEffect(() => {
+    if (destination) destRef.current = { lat: destination[0], lon: destination[1] };
+  }, [destination]);
+
+  const simStateRef = useRef(simState);
+  useEffect(() => { simStateRef.current = simState; }, [simState]);
+
+  const walkTickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (simState.simulateWalk) {
+      walkTickRef.current = setInterval(() => {
+        const s = simStateRef.current;
+        const d = destRef.current;
+        const brng = bearingTo(s.lat, s.lon, d.lat, d.lon);
+        const [newLat, newLon] = movePosition(s.lat, s.lon, brng, 1.4 * 0.05);
+        setSimState((prev) => ({
+          ...prev,
+          lat: newLat,
+          lon: newLon,
+          bearing: brng,
+          headBearing: brng,
+          stepCount: prev.stepCount + 1,
+        }));
+      }, 50);
+    } else {
+      if (walkTickRef.current) clearInterval(walkTickRef.current);
+    }
+    return () => { if (walkTickRef.current) clearInterval(walkTickRef.current); };
+  }, [simState.simulateWalk]);
+
+  const getRequest = useCallback((): NavigationRequest => {
+    const s = simStateRef.current;
+    const now = Date.now();
+    return {
+      sessionId,
+      rawGps: {
+        latitude: s.lat, longitude: s.lon, altitude: s.altitude,
+        accuracy: s.hdop * 3, hdop: s.hdop, bearing: s.bearing,
+        timestamp: now, mapMatched: false,
+      },
+      imu: {
+        accelX: 0, accelY: 0, accelZ: 9.81,
+        gyroX: 0, gyroY: 0, gyroZ: 0,
+        magX: 0, magY: 0, magZ: 0,
+        stepCount: s.stepCount, stepLengthMeters: s.stepLengthMeters,
+        headingDegrees: s.bearing, timestamp: now,
+      },
+      barometerAltitude: s.altitude,
+      ambientNoiseDb: s.ambientNoiseDb,
+      headBearing: s.headBearing,
+      destinationId: `${destRef.current.lat},${destRef.current.lon}`,
+    };
+  }, [sessionId]);
+
+  const isSessionActive = status === 'active';
+  const { lastResponse, isPolling: isNavPolling, startPolling, stopPolling, log: navLog, addLog } =
+    useNavigationSession(sessionId, getRequest, isSessionActive);
+
+  const targetBearing = lastResponse?.currentStep?.targetBearing ?? 0;
+  const { audioVector, isPolling: isAudioPolling, startPolling: startAudio, stopPolling: stopAudio } =
+    useAudioPolling(simState.headBearing, targetBearing, simState.ambientNoiseDb, true);
+
+  useNavigationNotifications(lastResponse ?? null);
+
+  useEffect(() => {
+    if (lastResponse?.arrived && status === 'active') {
+      setStatus('arrived');
+      stopPolling();
+    }
+  }, [lastResponse, status, stopPolling]);
+
+  const doFetchRoute = useCallback(async (orig: [number, number], dest: [number, number]) => {
+    setRouteLoading(true);
+    setRouteData(null);
+    try {
+      const result = await fetchRoute(orig[0], orig[1], dest[0], dest[1]);
+      setRouteData(result);
+    } finally {
+      setRouteLoading(false);
+    }
+  }, []);
+
+  const handleLocationPicked = useCallback(
+    (lat: number, lon: number, address: string) => {
+      if (pickMode === 'origin') {
+        setOrigin([lat, lon]);
+        setOriginAddress(address);
+        setPickMode('destination');
+        setRouteData(null);
+      } else if (pickMode === 'destination') {
+        const newDest: [number, number] = [lat, lon];
+        setDestination(newDest);
+        setDestAddress(address);
+        setPickMode(null);
+        if (origin) void doFetchRoute(origin, newDest);
+      }
+    },
+    [pickMode, origin, doFetchRoute]
+  );
+
+  const handleStart = async () => {
+    if (!origin || !destination) return;
+    await startNavigation({
+      sessionId,
+      originLat: origin[0], originLon: origin[1],
+      destLat: destination[0], destLon: destination[1],
+    });
+    setSimState((prev) => ({ ...prev, lat: origin[0], lon: origin[1] }));
+    setStatus('active');
+    addLog({ timestamp: Date.now(), type: 'start', durationMs: 0, status: 200 });
+  };
+
+  const handleEnd = async () => {
+    await endNavigation(sessionId);
+    setStatus('idle');
+    stopPolling();
+    addLog({ timestamp: Date.now(), type: 'end', durationMs: 0, status: 204 });
+  };
+
+  const handleReset = () => {
+    setOrigin(null);
+    setOriginAddress('');
+    setDestination(null);
+    setDestAddress('');
+    setRouteData(null);
+    setPickMode('origin');
+    setStatus('idle');
+  };
+
+  const canStart = !!origin && !!destination && status === 'idle';
+  const allLogs = [...navLog].sort((a, b) => b.timestamp - a.timestamp).slice(0, 5);
+
+  return (
+    <div className="fixed inset-0 flex flex-col bg-gray-900 overflow-hidden">
+      {/* ── Full-screen map ── */}
+      <div className="absolute inset-0">
+        <KakaoMap
+          origin={origin}
+          destination={destination}
+          currentPosition={lastResponse?.correctedPosition ?? null}
+          routeVertexes={routeData?.vertexes ?? []}
+          pickMode={status === 'idle' ? pickMode : null}
+          onLocationPicked={handleLocationPicked}
+        />
+      </div>
+
+      {/* ── Top overlay ── */}
+      <div className="absolute top-0 left-0 right-0 z-10 pointer-events-none">
+        {/* Header bar */}
+        <div className="flex items-center gap-2 px-4 py-3 bg-gray-900/85 backdrop-blur-md pointer-events-auto">
+          <span className="text-lg">🦯</span>
+          <h1 className="text-white font-bold text-sm">뚜벅이션</h1>
+          <div className={`w-2 h-2 rounded-full ${statusColor[status]}`} />
+          <span className="text-gray-400 text-xs">{statusLabel[status]}</span>
+          <div className="ml-auto flex gap-1.5">
+            {(origin || destination) && status === 'idle' && (
+              <button
+                onClick={handleReset}
+                className="text-gray-400 hover:text-white text-xs px-2 py-1 rounded bg-gray-700/60"
+              >
+                초기화
+              </button>
+            )}
+            <button
+              onClick={() => setShowDev((v) => !v)}
+              className={`text-xs px-2 py-1 rounded transition-colors ${showDev ? 'text-white bg-blue-600/60' : 'text-gray-400 hover:text-white bg-gray-700/60'}`}
+              title="개발자 도구"
+            >
+              ⚙️
+            </button>
+          </div>
+        </div>
+
+        {/* Route selection card (idle) */}
+        {status === 'idle' && (
+          <div className="mx-3 mt-2 bg-white/95 rounded-2xl shadow-xl p-3 space-y-2 pointer-events-auto">
+            {/* Origin */}
+            <button
+              onClick={() => setPickMode('origin')}
+              className={`flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-left transition-all ${
+                pickMode === 'origin'
+                  ? 'bg-green-50 ring-2 ring-green-500'
+                  : 'bg-gray-50 hover:bg-gray-100'
+              }`}
+            >
+              <span className="w-3 h-3 rounded-full bg-green-500 shrink-0" />
+              <span className={`text-sm truncate ${origin ? 'text-gray-800' : 'text-gray-400'}`}>
+                {origin
+                  ? originAddress || `${origin[0].toFixed(5)}, ${origin[1].toFixed(5)}`
+                  : '출발지를 지도에서 클릭하세요'}
+              </span>
+              {origin && pickMode !== 'origin' && (
+                <span className="ml-auto text-xs text-green-600 font-medium shrink-0">변경</span>
+              )}
+            </button>
+
+            {/* Divider */}
+            <div className="flex items-center gap-3 px-3">
+              <div className="w-3 flex justify-center">
+                <div className="w-0.5 h-3 bg-gray-300" />
+              </div>
+              <div className="flex-1 border-t border-dashed border-gray-200" />
+            </div>
+
+            {/* Destination */}
+            <button
+              onClick={() => origin && setPickMode('destination')}
+              disabled={!origin}
+              className={`flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-left transition-all ${
+                pickMode === 'destination'
+                  ? 'bg-red-50 ring-2 ring-red-500'
+                  : !origin
+                  ? 'bg-gray-50 opacity-50 cursor-not-allowed'
+                  : 'bg-gray-50 hover:bg-gray-100'
+              }`}
+            >
+              <span className="w-3 h-3 rounded-full bg-red-500 shrink-0" />
+              <span className={`text-sm truncate ${destination ? 'text-gray-800' : 'text-gray-400'}`}>
+                {destination
+                  ? destAddress || `${destination[0].toFixed(5)}, ${destination[1].toFixed(5)}`
+                  : origin
+                  ? '목적지를 지도에서 클릭하세요'
+                  : '출발지를 먼저 선택하세요'}
+              </span>
+              {destination && pickMode !== 'destination' && (
+                <span className="ml-auto text-xs text-red-600 font-medium shrink-0">변경</span>
+              )}
+            </button>
+
+            {/* Route status */}
+            {routeLoading && (
+              <div className="flex items-center gap-2 px-3 py-1 text-blue-600 text-xs">
+                <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                도보 경로 탐색 중...
+              </div>
+            )}
+            {routeData && !routeLoading && (
+              <div className="px-3 py-1.5 bg-green-50 rounded-xl">
+                <p className="text-green-600 text-xs font-medium mb-1">✓ 도보 경로 탐색 완료</p>
+                <div className="flex gap-3 text-xs text-gray-600">
+                  <span>🚶 {formatDistance(routeData.totalDistanceMeters)}</span>
+                  <span>⏱ 약 {formatDuration(routeData.totalDurationSeconds)}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Start button */}
+            {canStart && (
+              <button
+                onClick={() => void handleStart()}
+                className="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-sm font-semibold rounded-xl py-3 transition-colors shadow"
+              >
+                경로 안내 시작
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Active nav: compact bar */}
+        {status === 'active' && (
+          <div className="mx-3 mt-2 flex items-center gap-3 bg-gray-900/90 backdrop-blur-md rounded-xl px-4 py-2.5 shadow-xl pointer-events-auto">
+            <span className="text-green-400 text-xs font-medium shrink-0">안내 중</span>
+            <span className="text-gray-300 text-xs truncate flex-1">→ {destAddress || '목적지'}</span>
+            <button
+              onClick={() => void handleEnd()}
+              className="text-red-400 hover:text-red-300 text-xs font-medium px-3 py-1 rounded-lg bg-red-900/40 hover:bg-red-900/60 shrink-0"
+            >
+              종료
+            </button>
+          </div>
+        )}
+
+        {/* Arrived banner */}
+        {status === 'arrived' && (
+          <div className="mx-3 mt-2 bg-blue-600/90 backdrop-blur-md rounded-xl px-4 py-3 text-center text-white font-bold shadow-xl pointer-events-auto">
+            🎉 목적지에 도착했습니다!
+            <button
+              onClick={handleReset}
+              className="ml-3 text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full font-normal"
+            >
+              새 경로
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Bottom overlay: guidance (active/arrived) ── */}
+      {(status === 'active' || status === 'arrived') && lastResponse && (
+        <div className="absolute bottom-0 left-0 right-0 z-10 pointer-events-none">
+          <div className="mx-3 mb-3 pointer-events-auto">
+            <GuidanceDisplay response={lastResponse} noiseDb={simState.ambientNoiseDb} />
+          </div>
+        </div>
+      )}
+
+      {/* ── Developer panel (collapsible, bottom-right corner) ── */}
+      {showDev && (
+        <div className="absolute bottom-4 right-4 z-20 w-80 max-h-[70vh] overflow-y-auto space-y-3 pointer-events-auto">
+          <GpsSimulator simState={simState} setSimState={setSimState} />
+          <AudioVectorDisplay
+            audioVector={audioVector}
+            navAudio={lastResponse?.audioDirective ?? null}
+          />
+          <PollingControls
+            isNavPolling={isNavPolling}
+            isAudioPolling={isAudioPolling}
+            navEnabled={isSessionActive}
+            onToggleNav={isNavPolling ? stopPolling : startPolling}
+            onToggleAudio={isAudioPolling ? stopAudio : startAudio}
+            log={allLogs}
+          />
+        </div>
+      )}
+    </div>
+  );
+}

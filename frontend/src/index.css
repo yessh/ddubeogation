@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #111827;
+}
+
+/* Custom range input styling */
+input[type='range'] {
+  cursor: pointer;
+}
+
+/* Leaflet popup / tooltip dark mode override */
+.leaflet-container {
+  background: #1f2937;
+}
