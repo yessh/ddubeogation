@@ -1,3 +1,6 @@
+// Walking speed for duration estimate: 4 km/h
+const WALKING_SPEED_MPS = 4000 / 3600;
+
 export interface DirectionGuide {
   x: number; // longitude
   y: number; // latitude
@@ -14,101 +17,109 @@ export interface DirectionResult {
   totalDurationSeconds: number;
 }
 
+// ── Kakao Mobility Directions API ──────────────────────────────────────────
+// 자동차 경로 API지만 도로망은 도보와 동일. 시간은 거리 기반으로 재계산.
+
+interface KakaoRouteResponse {
+  routes: Array<{
+    result_code: number;
+    result_msg: string;
+    summary: {
+      distance: number; // meters
+      duration: number; // seconds (car — 사용 안 함)
+    };
+    sections: Array<{
+      roads: Array<{
+        name: string;
+        distance: number;
+        vertexes: number[]; // [lon, lat, lon, lat, ...]
+      }>;
+      guides: Array<{
+        name: string;
+        x: number;
+        y: number;
+        distance: number;
+        duration: number;
+        type: number;
+        guidance: string;
+      }>;
+    }>;
+  }>;
+}
+
+// Kakao guide type → our type code
+// 0: 직진, 1: 좌회전, 2: 우회전, 3: 우측방향, 4: 좌측방향
+// 5: U턴, 6: 출발, 7: 목적지
+function kakaoTypeCode(type: number): number {
+  if (type === 7) return 3; // 도착
+  if (type === 1 || type === 4) return 1; // 좌회전/좌측
+  if (type === 2 || type === 3) return 2; // 우회전/우측
+  return 0; // 직진/기타
+}
+
 export async function fetchRoute(
   originLat: number,
   originLon: number,
   destLat: number,
   destLon: number
 ): Promise<DirectionResult | null> {
+  const restKey = import.meta.env.VITE_KAKAO_REST_KEY as string;
+  if (!restKey) {
+    console.error('[Directions] VITE_KAKAO_REST_KEY is not set');
+    return null;
+  }
+
   try {
     const url =
-      `https://router.project-osrm.org/route/v1/foot/` +
-      `${originLon},${originLat};${destLon},${destLat}` +
-      `?overview=full&geometries=geojson&steps=true`;
+      `/kakao-navi/v1/directions` +
+      `?origin=${originLon},${originLat}` +
+      `&destination=${destLon},${destLat}` +
+      `&priority=RECOMMEND` +
+      `&car_fuel=GASOLINE&car_hipass=false`;
 
-    const res = await fetch(url);
+    const res = await fetch(url, {
+      headers: { Authorization: `KakaoAK ${restKey}` },
+    });
+
     if (!res.ok) {
-      console.error('[Directions] OSRM API error:', res.status);
+      console.error('[Directions] Kakao API error:', res.status);
       return null;
     }
 
-    const data = (await res.json()) as {
-      code: string;
-      routes?: Array<{
-        distance: number;
-        duration: number;
-        geometry: { coordinates: [number, number][] };
-        legs: Array<{
-          steps: Array<{
-            distance: number;
-            name: string;
-            maneuver: {
-              type: string;
-              modifier?: string;
-              location: [number, number];
-            };
-          }>;
-        }>;
-      }>;
-    };
-
-    if (data.code !== 'Ok' || !data.routes?.[0]) return null;
-
-    const route = data.routes[0];
-
-    // Convert GeoJSON coordinates to flat vertex array [lon, lat, ...]
-    const vertexes: number[] = [];
-    for (const [lon, lat] of route.geometry.coordinates) {
-      vertexes.push(lon, lat);
+    const data = (await res.json()) as KakaoRouteResponse;
+    const route = data.routes?.[0];
+    if (!route || route.result_code !== 0) {
+      console.warn('[Directions] Kakao route failed:', route?.result_code, route?.result_msg);
+      return null;
     }
 
-    // Convert steps to guides
+    // Collect vertexes and guides from all sections
+    const vertexes: number[] = [];
     const guides: DirectionGuide[] = [];
-    for (const leg of route.legs) {
-      for (const step of leg.steps) {
-        const [lon, lat] = step.maneuver.location;
+
+    for (const section of route.sections) {
+      for (const road of section.roads) {
+        vertexes.push(...road.vertexes);
+      }
+      for (const g of section.guides) {
         guides.push({
-          x: lon,
-          y: lat,
-          distance: step.distance,
-          type: maneuverTypeCode(step.maneuver.type, step.maneuver.modifier),
-          guidance: guidanceText(step.maneuver.type, step.maneuver.modifier, step.name),
-          name: step.name,
+          x: g.x,
+          y: g.y,
+          distance: g.distance,
+          type: kakaoTypeCode(g.type),
+          guidance: g.guidance,
+          name: g.name,
         });
       }
     }
 
-    return {
-      vertexes,
-      guides,
-      totalDistanceMeters: route.distance,
-      totalDurationSeconds: route.duration,
-    };
+    const totalDistanceMeters = route.summary.distance;
+    // 도보 시간 = 거리 ÷ 도보 속도 (4 km/h)
+    const totalDurationSeconds = Math.round(totalDistanceMeters / WALKING_SPEED_MPS);
+
+    return { vertexes, guides, totalDistanceMeters, totalDurationSeconds };
   } catch (err) {
-    console.error('[Directions] Fetch error:', err);
+    console.error('[Directions] fetch error:', err);
     return null;
   }
-}
-
-function maneuverTypeCode(type: string, modifier?: string): number {
-  if (type === 'arrive') return 3;
-  if (!modifier || modifier === 'straight' || modifier === 'uturn') return 0;
-  if (modifier.includes('left')) return 2;
-  if (modifier.includes('right')) return 1;
-  return 0;
-}
-
-function guidanceText(type: string, modifier?: string, name?: string): string {
-  const road = name ? ` (${name})` : '';
-  if (type === 'depart') return `출발${road}`;
-  if (type === 'arrive') return '목적지 도착';
-  if (!modifier || modifier === 'straight') return `직진${road}`;
-  if (modifier === 'slight left') return `왼쪽 방향${road}`;
-  if (modifier === 'left') return `좌회전${road}`;
-  if (modifier === 'sharp left') return `급좌회전${road}`;
-  if (modifier === 'slight right') return `오른쪽 방향${road}`;
-  if (modifier === 'right') return `우회전${road}`;
-  if (modifier === 'sharp right') return `급우회전${road}`;
-  if (modifier === 'uturn') return `유턴${road}`;
-  return `직진${road}`;
 }
