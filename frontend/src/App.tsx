@@ -51,7 +51,6 @@ const DEFAULT_SIM_STATE: SimState = {
   altitude: 30,
   hdop: 1.5,
   bearing: 0,
-  ambientNoiseDb: 50,
   headBearing: 0,
   stepCount: 0,
   stepLengthMeters: 0.75,
@@ -87,6 +86,9 @@ export default function App() {
   const [simState, setSimState] = useState<SimState>(DEFAULT_SIM_STATE);
   const [gpsPosition, setGpsPosition] = useState<[number, number] | null>(null);
   const [gpsAccuracy, setGpsAccuracy] = useState(0);
+  const [heading, setHeading] = useState<number | null>(null);
+  const [followGps, setFollowGps] = useState(true);
+  const setupOrientationRef = useRef<(() => void) | null>(null);
   const gpsInitRef = useRef(false);
 
   // suppress unused-var warning on setSessionId while keeping reset capability
@@ -96,6 +98,38 @@ export default function App() {
   useEffect(() => {
     if (destination) destRef.current = { lat: destination[0], lon: destination[1] };
   }, [destination]);
+
+  // 나침반 방향 (DeviceOrientation)
+  useEffect(() => {
+    const handleOrientation = (e: DeviceOrientationEvent) => {
+      const webkitHeading = (e as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
+      if (webkitHeading != null) {
+        setHeading(webkitHeading);
+      } else if ((e as DeviceOrientationEvent & { absolute?: boolean }).absolute && e.alpha != null) {
+        setHeading((360 - e.alpha + 360) % 360);
+      }
+    };
+
+    const setup = () => {
+      window.addEventListener('deviceorientationabsolute', handleOrientation as EventListener, true);
+      window.addEventListener('deviceorientation', handleOrientation as EventListener, true);
+    };
+
+    const isIOS =
+      typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission === 'function';
+
+    if (!isIOS) {
+      setup();
+    } else {
+      setupOrientationRef.current = setup;
+    }
+
+    return () => {
+      window.removeEventListener('deviceorientationabsolute', handleOrientation as EventListener, true);
+      window.removeEventListener('deviceorientation', handleOrientation as EventListener, true);
+    };
+  }, []);
 
   // GPS watchPosition: 실시간 위치 추적
   useEffect(() => {
@@ -211,7 +245,6 @@ export default function App() {
         headingDegrees: s.bearing, timestamp: now,
       },
       barometerAltitude: s.altitude,
-      ambientNoiseDb: s.ambientNoiseDb,
       headBearing: s.headBearing,
       destinationId: `${destRef.current.lat},${destRef.current.lon}`,
     };
@@ -312,6 +345,21 @@ export default function App() {
     setStatus('idle');
   };
 
+  const handleRecenter = useCallback(async () => {
+    setFollowGps(true);
+    if (setupOrientationRef.current) {
+      try {
+        const perm = await (DeviceOrientationEvent as unknown as { requestPermission: () => Promise<string> }).requestPermission();
+        if (perm === 'granted') {
+          setupOrientationRef.current();
+          setupOrientationRef.current = null;
+        }
+      } catch {
+        setupOrientationRef.current = null;
+      }
+    }
+  }, []);
+
   const canStart = !!origin && !!destination && status === 'idle';
 
   return (
@@ -326,6 +374,9 @@ export default function App() {
           routeVertexes={routeData?.vertexes ?? []}
           pickMode={status === 'idle' ? pickMode : null}
           onLocationPicked={handleLocationPicked}
+          heading={heading}
+          followGps={followGps}
+          onUserPan={() => setFollowGps(false)}
         />
       </div>
 
@@ -437,6 +488,21 @@ export default function App() {
             </button>
           </div>
         )}
+      </div>
+
+      {/* ── 현재 위치 버튼 (우측 하단) ── */}
+      <div className="absolute bottom-6 right-4 z-30 pointer-events-auto">
+        <button
+          onClick={() => void handleRecenter()}
+          className={`w-14 h-14 rounded-full shadow-xl flex items-center justify-center transition-colors ${
+            followGps ? 'bg-blue-500 text-white' : 'bg-white text-gray-700'
+          }`}
+          title="현재 위치로"
+        >
+          <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
+            <path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/>
+          </svg>
+        </button>
       </div>
 
       {/* ── Bottom overlay: guidance (active/arrived) ── */}

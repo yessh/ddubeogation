@@ -38,7 +38,6 @@ export interface NavigationRequest {
   rawGps: GpsPoint;
   imu: ImuData;
   barometerAltitude: number;
-  ambientNoiseDb: number;
   headBearing: number;
   destinationId: string;
 }
@@ -49,21 +48,6 @@ export interface GuidanceScript {
   fromCache: boolean;
   cacheKey: string;
   generatedAt: number;
-}
-
-export interface AudioDirective {
-  pitchHz: number;
-  stereoPan: number;
-  volumeMultiplier: number;
-  hapticIntensity: number;
-  thetaDegrees: number;
-  beepPattern: 'none' | 'single' | 'double' | 'triple' | 'continuous';
-  voiceEnabled: boolean;
-  hapticOnly: boolean;
-}
-
-export interface AudioVectorResponse extends AudioDirective {
-  directionHint: string;
 }
 
 export interface RouteStep {
@@ -80,7 +64,6 @@ export interface RouteStep {
 export interface NavigationResponse {
   correctedPosition: GpsPoint;
   guidance: GuidanceScript;
-  audioDirective: AudioDirective;
   currentStep: RouteStep;
   distanceToDestination: number;
   arrived: boolean;
@@ -90,7 +73,7 @@ export interface NavigationResponse {
 export interface LogEntry {
   id: number;
   timestamp: number;
-  type: 'nav-update' | 'audio-vector' | 'start' | 'end';
+  type: 'nav-update' | 'start' | 'end';
   durationMs: number;
   status: number;
   error?: string;
@@ -104,7 +87,6 @@ export interface SimState {
   altitude: number;
   hdop: number;
   bearing: number;
-  ambientNoiseDb: number;
   headBearing: number;
   stepCount: number;
   stepLengthMeters: number;

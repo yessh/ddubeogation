@@ -2,7 +2,6 @@ import type {
   StartRequest,
   NavigationRequest,
   NavigationResponse,
-  AudioVectorResponse,
 } from '../types/navigation';
 
 const BASE = '/api/v1';
@@ -36,20 +35,4 @@ export async function endNavigation(sessionId: string): Promise<void> {
     method: 'DELETE',
   });
   if (!res.ok && res.status !== 204) throw new Error(`End failed: ${res.status}`);
-}
-
-export async function getAudioVector(
-  userBearing: number,
-  targetBearing: number,
-  noiseDb: number,
-  signal?: AbortSignal
-): Promise<AudioVectorResponse> {
-  const params = new URLSearchParams({
-    userBearing: String(userBearing),
-    targetBearing: String(targetBearing),
-    noiseDb: String(noiseDb),
-  });
-  const res = await fetch(`${BASE}/audio/vector?${params}`, { signal });
-  if (!res.ok) throw new Error(`Audio vector failed: ${res.status}`);
-  return res.json() as Promise<AudioVectorResponse>;
 }

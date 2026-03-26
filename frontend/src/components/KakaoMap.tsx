@@ -9,11 +9,13 @@ interface Props {
   routeVertexes: number[];
   pickMode: 'origin' | 'destination' | null;
   onLocationPicked: (lat: number, lon: number, address: string) => void;
+  heading: number | null;
+  followGps: boolean;
+  onUserPan: () => void;
 }
 
 const DEFAULT_CENTER: [number, number] = [37.5665, 126.978];
 
-// Colored SVG marker as data URL
 function makeMarkerSvg(color: string, label: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 28 40">
     <path d="M14 0C6.268 0 0 6.268 0 14c0 9.941 14 26 14 26S28 23.941 28 14C28 6.268 21.732 0 14 0z" fill="${color}"/>
@@ -34,6 +36,9 @@ export const KakaoMap = React.memo(function KakaoMap({
   routeVertexes,
   pickMode,
   onLocationPicked,
+  heading,
+  followGps,
+  onUserPan,
 }: Props) {
   const sdkLoaded = useKakaoSdk();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -46,9 +51,13 @@ export const KakaoMap = React.memo(function KakaoMap({
   const gpsCircleRef = useRef<kakao.maps.Circle | null>(null);
   const routeLineRef = useRef<kakao.maps.Polyline | null>(null);
   const clickHandlerRef = useRef<((e: kakao.maps.MapMouseEvent) => void) | null>(null);
+  const headingContainerRef = useRef<HTMLDivElement | null>(null);
 
   const onLocationPickedRef = useRef(onLocationPicked);
   useEffect(() => { onLocationPickedRef.current = onLocationPicked; }, [onLocationPicked]);
+
+  const onUserPanRef = useRef(onUserPan);
+  useEffect(() => { onUserPanRef.current = onUserPan; }, [onUserPan]);
 
   // Initialize map
   useEffect(() => {
@@ -57,6 +66,15 @@ export const KakaoMap = React.memo(function KakaoMap({
     mapRef.current = new kakao.maps.Map(containerRef.current, { center, level: 5 });
     setMapReady(true);
   }, [sdkLoaded]);
+
+  // Drag listener: disable auto-follow when user pans
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const handler = () => onUserPanRef.current();
+    kakao.maps.event.addListener(map, 'drag', handler);
+    return () => kakao.maps.event.removeListener(map, 'drag', handler);
+  }, [mapReady]);
 
   const makeMarker = useCallback((iconSrc: string): kakao.maps.MarkerImage => {
     return new kakao.maps.MarkerImage(
@@ -80,7 +98,6 @@ export const KakaoMap = React.memo(function KakaoMap({
       const handler = (e: kakao.maps.MapMouseEvent) => {
         const lat = e.latLng.getLat();
         const lng = e.latLng.getLng();
-        // Reverse geocode
         try {
           const geocoder = new kakao.maps.services.Geocoder();
           geocoder.coord2Address(lng, lat, (result, status) => {
@@ -158,7 +175,7 @@ export const KakaoMap = React.memo(function KakaoMap({
     }
   }, [destination, mapReady, makeMarker]);
 
-  // GPS 실시간 위치 (파란 점 + 정확도 원)
+  // GPS 실시간 위치 (파란 점 + 정확도 원 + 방향 화살표)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
@@ -184,29 +201,67 @@ export const KakaoMap = React.memo(function KakaoMap({
         });
       }
 
-      // 파란 점 (CustomOverlay)
+      // 파란 점 + 방향 화살표
       if (gpsDotRef.current) {
         gpsDotRef.current.setPosition(pos);
       } else {
-        const content = '<div class="gps-dot-wrapper"><div class="gps-pulse"></div><div class="gps-dot"></div></div>';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'gps-dot-wrapper';
+
+        const headingContainer = document.createElement('div');
+        headingContainer.className = 'gps-heading-container';
+        headingContainer.style.visibility = 'hidden';
+        headingContainerRef.current = headingContainer;
+
+        const cone = document.createElement('div');
+        cone.className = 'gps-heading-cone';
+        headingContainer.appendChild(cone);
+
+        const pulse = document.createElement('div');
+        pulse.className = 'gps-pulse';
+
+        const dot = document.createElement('div');
+        dot.className = 'gps-dot';
+
+        wrapper.appendChild(headingContainer);
+        wrapper.appendChild(pulse);
+        wrapper.appendChild(dot);
+
         gpsDotRef.current = new kakao.maps.CustomOverlay({
           position: pos,
-          content,
+          content: wrapper,
           map,
           zIndex: 10,
           yAnchor: 0.5,
           xAnchor: 0.5,
         });
       }
-
-      map.setCenter(pos);
     } else {
       gpsDotRef.current?.setMap(null);
       gpsDotRef.current = null;
+      headingContainerRef.current = null;
       gpsCircleRef.current?.setMap(null);
       gpsCircleRef.current = null;
     }
   }, [gpsPosition, gpsAccuracy, mapReady]);
+
+  // 방향 회전 - DOM 직접 업데이트 (리렌더 없음)
+  useEffect(() => {
+    if (!headingContainerRef.current) return;
+    if (heading !== null) {
+      headingContainerRef.current.style.transform = `rotate(${heading}deg)`;
+      headingContainerRef.current.style.visibility = 'visible';
+    } else {
+      headingContainerRef.current.style.visibility = 'hidden';
+    }
+  }, [heading]);
+
+  // GPS 자동 따라가기
+  useEffect(() => {
+    if (!followGps || !mapRef.current || !gpsPosition || !mapReady) return;
+    const pos = new kakao.maps.LatLng(gpsPosition[0], gpsPosition[1]);
+    mapRef.current.setCenter(pos);
+  }, [gpsPosition, followGps, mapReady]);
 
   // Route polyline
   useEffect(() => {
@@ -219,7 +274,6 @@ export const KakaoMap = React.memo(function KakaoMap({
     if (routeVertexes.length >= 4) {
       const path: kakao.maps.LatLng[] = [];
       for (let i = 0; i + 1 < routeVertexes.length; i += 2) {
-        // vertexes are [lon, lat, lon, lat, ...]
         path.push(new kakao.maps.LatLng(routeVertexes[i + 1], routeVertexes[i]));
       }
       routeLineRef.current = new kakao.maps.Polyline({
@@ -230,7 +284,6 @@ export const KakaoMap = React.memo(function KakaoMap({
         map,
       });
 
-      // Fit bounds to route
       const bounds = new kakao.maps.LatLngBounds();
       path.forEach((p) => bounds.extend(p));
       if (!bounds.isEmpty()) {

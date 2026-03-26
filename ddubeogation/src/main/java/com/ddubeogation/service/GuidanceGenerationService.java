@@ -38,8 +38,7 @@ public class GuidanceGenerationService {
         2. 주변 POI(편의점, 카페, 간판 등)와 지형을 자연스럽게 문장에 녹이세요.
         3. 안내 문구는 20자 이내의 구어체 한국어로 작성하세요.
         4. 경사가 5% 이상이면 체감 표현(예: '가파른 오르막')을 포함하세요.
-        5. 주변 소음이 75dB 이상이면 핵심 단어 1~2개짜리 짧은 버전도 함께 제공하세요.
-        6. 도착 직전에는 '고개를 드세요'처럼 시선 해방 메시지를 포함하세요.
+        5. 도착 직전에는 '고개를 드세요'처럼 시선 해방 메시지를 포함하세요.
 
         응답 형식 (JSON):
         {
@@ -67,8 +66,8 @@ public class GuidanceGenerationService {
         return geminiClient.complete(SYSTEM_PROMPT, userPrompt)
             .map(response -> parseScript(response, cacheKey, false))
             .flatMap(script -> {
-                // 캐시 저장 (소음이나 특수 상황이 아닌 일반 구간만)
-                if (!ctx.isHighNoise() && !ctx.isLastStep()) {
+                // 캐시 저장 (마지막 구간이 아닌 일반 구간만)
+                if (!ctx.isLastStep()) {
                     return redis.opsForValue()
                         .set(CACHE_PREFIX + cacheKey, script.getText(), CACHE_TTL)
                         .thenReturn(script);
@@ -94,7 +93,6 @@ public class GuidanceGenerationService {
             - 다음 행동: %s
             - 주변 POI: %s
             - 지형: %s (경사 %s%%)
-            - 주변 소음: %ddB (%s)
             - 현재 시간대: %s
             - 마지막 구간: %s
             """,
@@ -102,8 +100,6 @@ public class GuidanceGenerationService {
             ctx.getTopPoiNames(2),
             elev.description,
             elev.grade,
-            ctx.getAmbientNoiseDb(),
-            ctx.isHighNoise() ? "고소음 구간" : "보통",
             ctx.getTimeContext(),
             ctx.isLastStep() ? "예 (도착 직전)" : "아니오"
         );

@@ -29,10 +29,9 @@ public class ContextBuilderService {
     public Mono<NavigationContext> build(
             GpsPoint  position,
             RouteStep nextStep,
-            int       noiseDb,
             double    distanceToDestination) {
 
-        // 3가지 데이터를 병렬로 수집
+        // 2가지 데이터를 병렬로 수집
         Mono<List<Poi>> poisMono = overpassClient
             .queryPoisNearby(position, POI_RADIUS_METERS)
             .map(pois -> enrichWithRelativePosition(pois, position))
@@ -49,15 +48,13 @@ public class ContextBuilderService {
                 .nextStep(nextStep)
                 .nearbyPois(tuple.getT1())
                 .elevationProfile(tuple.getT2())
-                .ambientNoiseDb(noiseDb)
                 .distanceToDestination(distanceToDestination)
                 .isLastStep(distanceToDestination < ARRIVAL_THRESHOLD_M)
                 .build())
-            .doOnSuccess(ctx -> log.debug("[Context] pois={} grade={}% noise={}dB",
+            .doOnSuccess(ctx -> log.debug("[Context] pois={} grade={}%",
                 ctx.getNearbyPois().size(),
-                ctx.getElevationProfile().getGradePercent(),
-                ctx.getAmbientNoiseDb()))
-            .onErrorReturn(buildFallbackContext(position, nextStep, noiseDb, distanceToDestination));
+                ctx.getElevationProfile().getGradePercent()))
+            .onErrorReturn(buildFallbackContext(position, nextStep, distanceToDestination));
     }
 
     /**
@@ -106,14 +103,13 @@ public class ContextBuilderService {
     }
 
     private NavigationContext buildFallbackContext(
-            GpsPoint pos, RouteStep step, int noise, double dist) {
+            GpsPoint pos, RouteStep step, double dist) {
         log.warn("[Context] Fallback context used — external API unavailable");
         return NavigationContext.builder()
             .currentPosition(pos)
             .nextStep(step)
             .nearbyPois(List.of())
             .elevationProfile(flatProfile())
-            .ambientNoiseDb(noise)
             .distanceToDestination(dist)
             .isLastStep(dist < ARRIVAL_THRESHOLD_M)
             .build();

@@ -14,12 +14,6 @@ gradle wrapper
 # Run all tests
 ./gradlew test
 
-# Run single test class
-./gradlew test --tests "com.ddubeogation.AudioVectorServiceTest"
-
-# Run single test method
-./gradlew test --tests "com.ddubeogation.AudioVectorServiceTest.straightAhead"
-
 # Run application (required env vars below)
 ./gradlew bootRun
 ```
@@ -57,27 +51,23 @@ npm run build    # production build
 
 ```
 frontend/src/
-├── api/navigation.ts         # API client (startNavigation, updateNavigation, endNavigation, getAudioVector)
+├── api/navigation.ts         # API client (startNavigation, updateNavigation, endNavigation)
 ├── types/navigation.ts       # TypeScript interfaces mirroring Java models
 ├── hooks/
-│   ├── useNavigationSession.ts  # 50ms polling loop (setInterval + AbortController)
-│   └── useAudioPolling.ts       # 20ms polling loop for audio vector endpoint
+│   └── useNavigationSession.ts  # 50ms polling loop (setInterval + AbortController)
 └── components/
     ├── NavigationSetup.tsx      # Session lifecycle (sessionId, origin/dest coords, start/end)
-    ├── GpsSimulator.tsx         # Sensor simulation (lat/lon edit, HDOP/bearing/noise sliders, walk toggle)
     ├── MapView.tsx              # Leaflet map (origin/dest/current markers, position trail polyline)
-    ├── GuidanceDisplay.tsx      # Guidance text (noise-adaptive), step info, arrival banner
-    ├── AudioVectorDisplay.tsx   # SVG compass, pitch bar, pan meter, haptic bar, beep pattern
+    ├── GuidanceDisplay.tsx      # Guidance text, step info, arrival banner
     └── PollingControls.tsx      # Start/stop polling, request log (last 5 entries)
 ```
 
 ### Key Frontend Patterns
 
-- **AbortController on every tick**: The 50ms/20ms intervals abort any in-flight request before starting the next. This prevents request queuing when the backend is slow.
+- **AbortController on every tick**: The 50ms intervals abort any in-flight request before starting the next. This prevents request queuing when the backend is slow.
 - **Stale closure prevention**: `getRequest()` callback is stored in a `useRef` and updated each render so the polling `setInterval` always reads the current simulated sensor state.
 - **Walk simulation**: Moves the simulated GPS position toward the destination at 1.4 m/s using Haversine bearing + dead-reckoning. Bearing is auto-computed and fed into IMU `headingDegrees`.
 - **IMU auto-values**: `accelZ = 9.81`, other fields default to 0 so testers don't need to fill all 12 IMU fields.
-- **Noise-adaptive text**: Client mirrors backend thresholds — shows `shortText` at ≥75dB, `"HAPTIC ONLY"` at ≥85dB.
 
 ### Testing Scenarios
 
@@ -85,7 +75,6 @@ frontend/src/
 |---|---|
 | Kalman filter (GPS vs IMU) | Set HDOP > 4 → IMU dead reckoning dominates |
 | Map-matching | Set HDOP > 3 → OSRM snaps position to nearest road |
-| Noise adaptation | Drag noise slider past 60/75/85dB thresholds |
 | Off-route recovery | Edit lat/lon to a position > 30m from route |
 | Redis cache hit | Same route, second run → `CACHED` badge appears |
 
@@ -104,11 +93,8 @@ NavigationRequest
   → RouteService.getCurrentStep()
   → ContextBuilderService      (Mono.zip: POI + elevation in parallel)
   → GuidanceGenerationService  (Redis cache → Claude API)
-  → AudioVectorService         (θ → pitch/pan/haptic)
   → NavigationResponse
 ```
-
-A second endpoint `GET /api/v1/audio/vector` runs at 20ms for head-tracking updates — intentionally decoupled from the 50ms position loop.
 
 ### Session Lifecycle
 
@@ -124,19 +110,7 @@ Barometer altitude always takes priority over GPS altitude. Map-matching via OSR
 
 ### LLM Guidance Rules (GuidanceGenerationService)
 
-The system prompt hard-forbids mentioning distances (m/km). All guidance uses POI landmarks and terrain descriptions. Cache key is `{direction}_{terrain}_{topPoi}` — semantic, not GPS-based — so the same cache entry is reused across sessions walking the same route. High-noise or last-step guidance is never cached.
-
-### Noise-Adaptive Audio (AudioVectorService)
-
-Three degradation thresholds:
-| Noise | Mode |
-|-------|------|
-| < 60dB | Full TTS voice |
-| 60–74dB | Voice + louder beep |
-| 75–84dB | Short-text TTS only |
-| ≥ 85dB | Haptic-only (voice disabled) |
-
-3D spatial encoding: `pitch = 300 + (|θ|/90) × 200 Hz`, `pan = sign(θ) × (|θ|/180)`. Beep pattern escalates from `none` → `single` → `double` → `triple` as θ grows.
+The system prompt hard-forbids mentioning distances (m/km). All guidance uses POI landmarks and terrain descriptions. Cache key is `{direction}_{terrain}_{topPoi}` — semantic, not GPS-based — so the same cache entry is reused across sessions walking the same route. Last-step guidance is never cached.
 
 ### Off-Route Recovery (RouteService)
 

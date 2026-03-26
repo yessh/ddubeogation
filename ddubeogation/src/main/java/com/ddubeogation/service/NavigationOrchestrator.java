@@ -15,8 +15,7 @@ import reactor.core.publisher.Mono;
  * 2. 경로 스텝 결정
  * 3. 컨텍스트 수집 (POI + 고도) — 병렬
  * 4. LLM 안내 문구 생성
- * 5. 3D 오디오 벡터 계산
- * 6. 통합 응답 반환
+ * 5. 통합 응답 반환
  */
 @Slf4j
 @Service
@@ -28,7 +27,6 @@ public class NavigationOrchestrator {
     private final RouteService            routeService;
     private final ContextBuilderService   contextBuilder;
     private final GuidanceGenerationService guidanceGen;
-    private final AudioVectorService      audioVector;
 
     public Mono<NavigationResponse> process(NavigationRequest req) {
         String sessionId = req.getSessionId();
@@ -57,33 +55,19 @@ public class NavigationOrchestrator {
                     double distToDest = routeService.getDistanceToDestination(sessionId, pos);
 
                     // ── 4. 컨텍스트 수집 (POI + 고도) — 비동기 ────
-                    return contextBuilder.build(pos, step, req.getAmbientNoiseDb(), distToDest)
+                    return contextBuilder.build(pos, step, distToDest)
                         .flatMap(ctx -> {
 
                             // ── 5. LLM 안내 문구 생성 ────────────
                             return guidanceGen.generate(ctx)
                                 .map(script -> {
 
-                                    // ── 6. 3D 오디오 벡터 계산 ──────
-                                    double targetBearing = step.getTargetBearing();
-                                    double userBearing   = req.getImu().getHeadingDegrees();
-                                    // Head Tracker가 있으면 headBearing 우선 사용
-                                    if (req.getHeadBearing() > 0) {
-                                        userBearing = req.getHeadBearing();
-                                    }
-
-                                    AudioDirective audio = audioVector.compute(
-                                        userBearing, targetBearing, req.getAmbientNoiseDb()
-                                    );
-
-                                    log.debug("[Orchestrator] session={} step={} θ={}° noise={}dB",
-                                        sessionId, step.getDirection(),
-                                        audio.getThetaDegrees(), req.getAmbientNoiseDb());
+                                    log.debug("[Orchestrator] session={} step={}",
+                                        sessionId, step.getDirection());
 
                                     return NavigationResponse.builder()
                                         .correctedPosition(pos)
                                         .guidance(script)
-                                        .audioDirective(audio)
                                         .currentStep(step)
                                         .distanceToDestination(distToDest)
                                         .arrived(false)
@@ -104,24 +88,12 @@ public class NavigationOrchestrator {
             .generatedAt(System.currentTimeMillis())
             .build();
 
-        AudioDirective quietAudio = AudioDirective.builder()
-            .pitchHz(300.0)
-            .stereoPan(0.0)
-            .volumeMultiplier(0.5)
-            .hapticIntensity(200)
-            .thetaDegrees(0.0)
-            .beepPattern("none")
-            .voiceEnabled(true)
-            .hapticOnly(false)
-            .build();
-
         routeService.clearSession(sessionId);
         kalmanFilter.clearSession(sessionId);
 
         return Mono.just(NavigationResponse.builder()
             .correctedPosition(pos)
             .guidance(arrivalScript)
-            .audioDirective(quietAudio)
             .arrived(true)
             .sessionId(sessionId)
             .build());

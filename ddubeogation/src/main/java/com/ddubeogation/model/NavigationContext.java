@@ -18,7 +18,6 @@ public class NavigationContext {
     private RouteStep        nextStep;
     private List<Poi>        nearbyPois;
     private ElevationProfile elevationProfile;
-    private int              ambientNoiseDb;
     private double           distanceToDestination; // 남은 거리 (m)
     private boolean          isLastStep;
 
@@ -43,11 +42,4 @@ public class NavigationContext {
         return "밤";
     }
 
-    public boolean isHighNoise() {
-        return ambientNoiseDb >= 75;
-    }
-
-    public boolean isExtremeNoise() {
-        return ambientNoiseDb >= 85;
-    }
 }
