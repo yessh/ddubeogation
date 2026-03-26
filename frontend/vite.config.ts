@@ -34,6 +34,16 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      '/valhalla': {
+        target: 'https://valhalla.openstreetmap.de',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/valhalla/, ''),
+      },
+      '/tmap': {
+        target: 'https://apis.openapi.sk.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/tmap/, ''),
+      },
     },
   },
 })

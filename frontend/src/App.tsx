@@ -251,7 +251,7 @@ export default function App() {
   }, [sessionId]);
 
   const isSessionActive = status === 'active';
-  const { lastResponse, startPolling, stopPolling } =
+  const { lastResponse, stopPolling } =
     useNavigationSession(sessionId, getRequest, isSessionActive);
 
   useNavigationNotifications(lastResponse ?? null);

@@ -1,4 +1,3 @@
-// Walking speed for duration estimate: 4 km/h
 const WALKING_SPEED_MPS = 4000 / 3600;
 
 export interface DirectionGuide {
@@ -17,11 +16,196 @@ export interface DirectionResult {
   totalDurationSeconds: number;
 }
 
-export async function fetchRoute(
-  originLat: number,
-  originLon: number,
-  destLat: number,
-  destLon: number
+// ── TMAP 보행자 ──────────────────────────────────────────────────────────────
+
+const TMAP_KEY = import.meta.env.VITE_TMAP_KEY as string | undefined;
+const TMAP_BASE = import.meta.env.DEV
+  ? '/tmap/tmap/routes/pedestrian'
+  : 'https://apis.openapi.sk.com/tmap/routes/pedestrian';
+
+/** TMAP turnType → DirectionGuide type code (0=직진, 1=우, 2=좌, 3=도착) */
+function tmapTurnCode(turnType: number): number {
+  if (turnType === 125) return 3;                         // 도착
+  if (turnType === 12 || turnType === 16 || turnType === 18) return 2; // 좌측 계열
+  if (turnType === 13 || turnType === 17 || turnType === 19) return 1; // 우측 계열
+  return 0;                                               // 직진, 출발, 유턴 등
+}
+
+type TmapFeature = {
+  type: 'Feature';
+  geometry:
+    | { type: 'LineString'; coordinates: [number, number][] }
+    | { type: 'Point'; coordinates: [number, number] };
+  properties: {
+    pointType?: 'SP' | 'EP' | 'GP';
+    turnType?: number;
+    description?: string;
+    streetName?: string;
+    distance?: number;
+    totalDistance?: number;
+    totalTime?: number;
+  };
+};
+
+async function fetchRouteTmap(
+  originLat: number, originLon: number,
+  destLat: number, destLon: number
+): Promise<DirectionResult | null> {
+  if (!TMAP_KEY) return null;
+
+  const tmapUrl = `${TMAP_BASE}?version=1&appKey=${TMAP_KEY}`;
+  const res = await fetch(tmapUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      startX: String(originLon),
+      startY: String(originLat),
+      endX: String(destLon),
+      endY: String(destLat),
+      reqCoordType: 'WGS84GEO',
+      resCoordType: 'WGS84GEO',
+      startName: '출발지',
+      endName: '목적지',
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error('[Directions] TMAP error:', res.status, errText);
+    return null;
+  }
+
+  const data = (await res.json()) as { features?: TmapFeature[] };
+  console.log('[Directions] TMAP 응답 features 수:', data.features?.length ?? 0);
+  if (!data.features?.length) return null;
+
+  const vertexes: number[] = [];
+  const guides: DirectionGuide[] = [];
+  let totalDistanceMeters = 0;
+  let totalDurationSeconds = 0;
+
+  for (const f of data.features) {
+    if (f.geometry.type === 'LineString') {
+      for (const [lon, lat] of f.geometry.coordinates) vertexes.push(lon, lat);
+    } else {
+      // Point feature
+      const [lon, lat] = f.geometry.coordinates;
+      const p = f.properties;
+
+      if (p.pointType === 'SP') {
+        totalDistanceMeters = p.totalDistance ?? 0;
+        totalDurationSeconds = p.totalTime ?? 0;
+      }
+
+      // SP/GP/EP 모두 안내 포인트로 추가
+      guides.push({
+        x: lon, y: lat,
+        distance: p.distance ?? 0,
+        type: tmapTurnCode(p.turnType ?? 11),
+        guidance: p.description ?? '',
+        name: p.streetName ?? '',
+      });
+    }
+  }
+
+  if (vertexes.length < 4) return null;
+
+  console.log('[Directions] TMAP 성공 - 거리:', totalDistanceMeters + 'm');
+  return { vertexes, guides, totalDistanceMeters, totalDurationSeconds };
+}
+
+// ── Valhalla (secondary fallback) ────────────────────────────────────────────
+
+const VALHALLA_URL = import.meta.env.DEV
+  ? '/valhalla/route'
+  : 'https://valhalla.openstreetmap.de/route';
+
+function valhallaManeuverCode(type: number): number {
+  if (type === 4) return 3;
+  if (type === 5 || type === 6 || type === 7) return 2;
+  if (type === 12 || type === 13 || type === 14) return 1;
+  return 0;
+}
+
+function decodePolyline(encoded: string): [number, number][] {
+  const factor = 1e6;
+  const points: [number, number][] = [];
+  let lat = 0, lon = 0, i = 0;
+  while (i < encoded.length) {
+    let shift = 0, val = 0, b: number;
+    do { b = encoded.charCodeAt(i++) - 63; val |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += val & 1 ? ~(val >> 1) : val >> 1;
+    shift = 0; val = 0;
+    do { b = encoded.charCodeAt(i++) - 63; val |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lon += val & 1 ? ~(val >> 1) : val >> 1;
+    points.push([lat / factor, lon / factor]);
+  }
+  return points;
+}
+
+async function fetchRouteValhalla(
+  originLat: number, originLon: number,
+  destLat: number, destLon: number
+): Promise<DirectionResult | null> {
+  const res = await fetch(VALHALLA_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      locations: [{ lon: originLon, lat: originLat }, { lon: destLon, lat: destLat }],
+      costing: 'pedestrian',
+      directions_options: { units: 'km' },
+    }),
+  });
+  if (!res.ok) return null;
+
+  const data = (await res.json()) as {
+    trip?: {
+      summary: { length: number; time: number };
+      legs: Array<{
+        shape: string;
+        maneuvers: Array<{
+          type: number; instruction: string;
+          street_names?: string[]; length: number; begin_shape_index: number;
+        }>;
+      }>;
+    };
+  };
+  if (!data.trip) return null;
+
+  const vertexes: number[] = [];
+  const guides: DirectionGuide[] = [];
+  let allPoints: [number, number][] = [];
+
+  for (const leg of data.trip.legs) {
+    const points = decodePolyline(leg.shape);
+    const offset = allPoints.length;
+    allPoints = allPoints.concat(points);
+    for (const [lat, lon] of points) vertexes.push(lon, lat);
+    for (const m of leg.maneuvers) {
+      const [lat, lon] = allPoints[offset + m.begin_shape_index] ?? points[0];
+      guides.push({
+        x: lon, y: lat,
+        distance: Math.round(m.length * 1000),
+        type: valhallaManeuverCode(m.type),
+        guidance: m.instruction,
+        name: m.street_names?.[0] ?? '',
+      });
+    }
+  }
+
+  if (vertexes.length < 4) return null;
+  return {
+    vertexes, guides,
+    totalDistanceMeters: Math.round(data.trip.summary.length * 1000),
+    totalDurationSeconds: Math.round(data.trip.summary.time),
+  };
+}
+
+// ── OSRM (final fallback) ────────────────────────────────────────────────────
+
+async function fetchRouteOsrm(
+  originLat: number, originLon: number,
+  destLat: number, destLon: number
 ): Promise<DirectionResult | null> {
   try {
     const url =
@@ -30,87 +214,78 @@ export async function fetchRoute(
       `?overview=full&geometries=geojson&steps=true`;
 
     const res = await fetch(url);
-    if (!res.ok) {
-      console.error('[Directions] OSRM API error:', res.status);
-      return null;
-    }
+    if (!res.ok) return null;
 
     const data = (await res.json()) as {
       code: string;
       routes?: Array<{
         distance: number;
-        duration: number;
         geometry: { coordinates: [number, number][] };
         legs: Array<{
           steps: Array<{
-            distance: number;
-            name: string;
-            maneuver: {
-              type: string;
-              modifier?: string;
-              location: [number, number];
-            };
+            distance: number; name: string;
+            maneuver: { type: string; modifier?: string; location: [number, number] };
           }>;
         }>;
       }>;
     };
-
     if (data.code !== 'Ok' || !data.routes?.[0]) return null;
 
     const route = data.routes[0];
-
     const vertexes: number[] = [];
-    for (const [lon, lat] of route.geometry.coordinates) {
-      vertexes.push(lon, lat);
-    }
+    for (const [lon, lat] of route.geometry.coordinates) vertexes.push(lon, lat);
 
     const guides: DirectionGuide[] = [];
     for (const leg of route.legs) {
       for (const step of leg.steps) {
         const [lon, lat] = step.maneuver.location;
-        guides.push({
-          x: lon,
-          y: lat,
-          distance: step.distance,
-          type: maneuverTypeCode(step.maneuver.type, step.maneuver.modifier),
-          guidance: guidanceText(step.maneuver.type, step.maneuver.modifier, step.name),
-          name: step.name,
-        });
+        const m = step.maneuver.modifier;
+        const t = step.maneuver.type;
+        const road = step.name ? ` (${step.name})` : '';
+        let type = 0, guidance = `직진${road}`;
+        if (t === 'arrive') { type = 3; guidance = '목적지 도착'; }
+        else if (t === 'depart') { guidance = `출발${road}`; }
+        else if (m?.includes('left')) { type = 2; guidance = `좌회전${road}`; }
+        else if (m?.includes('right')) { type = 1; guidance = `우회전${road}`; }
+        guides.push({ x: lon, y: lat, distance: step.distance, type, guidance, name: step.name });
       }
     }
 
     return {
-      vertexes,
-      guides,
+      vertexes, guides,
       totalDistanceMeters: route.distance,
-      // OSRM duration이 부정확하므로 거리 기반 도보 시간으로 재계산 (4 km/h)
       totalDurationSeconds: Math.round(route.distance / WALKING_SPEED_MPS),
     };
   } catch (err) {
-    console.error('[Directions] Fetch error:', err);
+    console.error('[Directions] OSRM error:', err);
     return null;
   }
 }
 
-function maneuverTypeCode(type: string, modifier?: string): number {
-  if (type === 'arrive') return 3;
-  if (!modifier || modifier === 'straight' || modifier === 'uturn') return 0;
-  if (modifier.includes('left')) return 2;
-  if (modifier.includes('right')) return 1;
-  return 0;
-}
+// ── Public API ───────────────────────────────────────────────────────────────
 
-function guidanceText(type: string, modifier?: string, name?: string): string {
-  const road = name ? ` (${name})` : '';
-  if (type === 'depart') return `출발${road}`;
-  if (type === 'arrive') return '목적지 도착';
-  if (!modifier || modifier === 'straight') return `직진${road}`;
-  if (modifier === 'slight left') return `왼쪽 방향${road}`;
-  if (modifier === 'left') return `좌회전${road}`;
-  if (modifier === 'sharp left') return `급좌회전${road}`;
-  if (modifier === 'slight right') return `오른쪽 방향${road}`;
-  if (modifier === 'right') return `우회전${road}`;
-  if (modifier === 'sharp right') return `급우회전${road}`;
-  if (modifier === 'uturn') return `유턴${road}`;
-  return `직진${road}`;
+export async function fetchRoute(
+  originLat: number, originLon: number,
+  destLat: number, destLon: number
+): Promise<DirectionResult | null> {
+  // 1순위: TMAP (한국 보행자 최적화 - 지하철역 통로 포함)
+  if (TMAP_KEY) {
+    try {
+      const result = await fetchRouteTmap(originLat, originLon, destLat, destLon);
+      if (result) return result;
+      console.warn('[Directions] TMAP 결과 없음, Valhalla로 재시도');
+    } catch (err) {
+      console.warn('[Directions] TMAP 실패, Valhalla fallback:', err);
+    }
+  }
+  // 2순위: Valhalla
+  try {
+    const result = await fetchRouteValhalla(originLat, originLon, destLat, destLon);
+    if (result) return result;
+    console.warn('[Directions] Valhalla 결과 없음, OSRM으로 재시도');
+  } catch (err) {
+    console.warn('[Directions] Valhalla 실패, OSRM fallback:', err);
+  }
+  // 최종 fallback: OSRM
+  return fetchRouteOsrm(originLat, originLon, destLat, destLon);
 }
