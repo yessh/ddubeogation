@@ -11,6 +11,7 @@ interface Props {
   onLocationPicked: (lat: number, lon: number, address: string) => void;
   heading: number | null;
   followGps: boolean;
+  recenterKey?: number;
   onUserPan: () => void;
 }
 
@@ -38,6 +39,7 @@ export const KakaoMap = React.memo(function KakaoMap({
   onLocationPicked,
   heading,
   followGps,
+  recenterKey,
   onUserPan,
 }: Props) {
   const sdkLoaded = useKakaoSdk();
@@ -262,6 +264,13 @@ export const KakaoMap = React.memo(function KakaoMap({
     const pos = new kakao.maps.LatLng(gpsPosition[0], gpsPosition[1]);
     mapRef.current.setCenter(pos);
   }, [gpsPosition, followGps, mapReady]);
+
+  // 현재 위치 버튼: 1회 이동 (고정 없음)
+  useEffect(() => {
+    if (!recenterKey || !mapRef.current || !gpsPosition || !mapReady) return;
+    mapRef.current.setCenter(new kakao.maps.LatLng(gpsPosition[0], gpsPosition[1]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recenterKey]);
 
   // Route polyline
   useEffect(() => {

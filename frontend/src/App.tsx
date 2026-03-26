@@ -88,6 +88,7 @@ export default function App() {
   const [gpsAccuracy, setGpsAccuracy] = useState(0);
   const [heading, setHeading] = useState<number | null>(null);
   const [followGps, setFollowGps] = useState(true);
+  const [recenterKey, setRecenterKey] = useState(0);
   const setupOrientationRef = useRef<(() => void) | null>(null);
   const gpsInitRef = useRef(false);
 
@@ -346,7 +347,7 @@ export default function App() {
   };
 
   const handleRecenter = useCallback(async () => {
-    setFollowGps(true);
+    setRecenterKey((k) => k + 1);
     if (setupOrientationRef.current) {
       try {
         const perm = await (DeviceOrientationEvent as unknown as { requestPermission: () => Promise<string> }).requestPermission();
@@ -376,6 +377,7 @@ export default function App() {
           onLocationPicked={handleLocationPicked}
           heading={heading}
           followGps={followGps}
+          recenterKey={recenterKey}
           onUserPan={() => setFollowGps(false)}
         />
       </div>
@@ -495,7 +497,7 @@ export default function App() {
         <button
           onClick={() => void handleRecenter()}
           className={`w-14 h-14 rounded-full shadow-xl flex items-center justify-center transition-colors ${
-            followGps ? 'bg-blue-500 text-white' : 'bg-white text-gray-700'
+            'bg-white text-gray-700'
           }`}
           title="현재 위치로"
         >
