@@ -1,31 +1,29 @@
-# Stage 1: Build the application
+# 1단계: 빌드 스테이지
 FROM eclipse-temurin:21-jdk-jammy AS build
 WORKDIR /app
 
-# Copy gradle wrapper and build files
+# Gradle 래퍼와 설정 파일들을 먼저 복사
 COPY gradlew .
 COPY gradle gradle
 COPY build.gradle .
+COPY settings.gradle .
 
-# Make the wrapper executable
+# 권한 부여
 RUN chmod +x ./gradlew
 
-# Download dependencies (this layer will be cached unless build.gradle changes)
+# 의존성 미리 다운로드 (캐싱 활용)
 RUN ./gradlew dependencies --no-daemon || true
 
-# Copy source code and build
+# 소스 코드 복사 및 빌드
 COPY src src
 RUN ./gradlew build -x test --no-daemon
 
-# Stage 2: Setup the runtime environment
+# 2단계: 실행 스테이지
 FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
 
-# Copy the built jar from the build stage
+# 빌드된 jar 복사
 COPY --from=build /app/build/libs/*.jar app.jar
 
-# Render exposes and routes traffic to port 8080 by default for web services
 EXPOSE 8080
-
-# Run the Spring Boot application
 ENTRYPOINT ["java", "-jar", "app.jar"]
