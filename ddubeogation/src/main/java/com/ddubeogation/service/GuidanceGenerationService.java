@@ -111,8 +111,7 @@ public class GuidanceGenerationService {
      */
     private String buildCacheKey(NavigationContext ctx) {
         String dir      = ctx.getNextStep() != null ? ctx.getNextStep().getDirection() : "straight";
-        String terrain  = ctx.getElevationProfile() != null
-            ? ctx.getElevationProfile().toKoreanTerrain() : "평지";
+        String terrain  = "평지";
         String topPoi   = ctx.getNearbyPois().isEmpty()
             ? "none"
             : ctx.getNearbyPois().get(0).getName().replaceAll("\\s", "");
@@ -165,10 +164,6 @@ public class GuidanceGenerationService {
     private record ElevationInfo(String description, String grade) {}
 
     private ElevationInfo extractElevation(NavigationContext ctx) {
-        if (ctx.getElevationProfile() == null) return new ElevationInfo("평지", "0");
-        return new ElevationInfo(
-            ctx.getElevationProfile().toKoreanTerrain(),
-            String.format("%.1f", ctx.getElevationProfile().getGradePercent())
-        );
+        return new ElevationInfo("평지", "0");
     }
 }

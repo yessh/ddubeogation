@@ -17,7 +17,6 @@ public class NavigationContext {
     private GpsPoint         currentPosition;
     private RouteStep        nextStep;
     private List<Poi>        nearbyPois;
-    private ElevationProfile elevationProfile;
     private double           distanceToDestination; // 남은 거리 (m)
     private boolean          isLastStep;
 

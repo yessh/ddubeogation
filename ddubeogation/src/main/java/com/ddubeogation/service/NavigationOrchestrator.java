@@ -1,8 +1,7 @@
 package com.ddubeogation.service;
 
-import com.ddubeogation.client.OsrmClient;
 import com.ddubeogation.model.*;
-import com.ddubeogation.util.GeoUtils;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -11,9 +10,9 @@ import reactor.core.publisher.Mono;
 /**
  * 내비게이션 파이프라인의 진입점.
  *
- * 1. GPS 보정 (Kalman + Map-Match)
+ * 1. GPS 보정 (Kalman)
  * 2. 경로 스텝 결정
- * 3. 컨텍스트 수집 (POI + 고도) — 병렬
+ * 3. 컨텍스트 수집 (POI) — 비동기
  * 4. LLM 안내 문구 생성
  * 5. 통합 응답 반환
  */
@@ -23,7 +22,6 @@ import reactor.core.publisher.Mono;
 public class NavigationOrchestrator {
 
     private final KalmanGpsFilterService  kalmanFilter;
-    private final OsrmClient              osrmClient;
     private final RouteService            routeService;
     private final ContextBuilderService   contextBuilder;
     private final GuidanceGenerationService guidanceGen;
@@ -36,12 +34,7 @@ public class NavigationOrchestrator {
             sessionId, req.getRawGps(), req.getImu(), req.getBarometerAltitude()
         );
 
-        // HDOP가 나쁜 구간에서 Map-Matching 수행
-        Mono<GpsPoint> posMono = (corrected.getHdop() > 3.0)
-            ? osrmClient.snapToRoad(corrected)
-            : Mono.just(corrected);
-
-        return posMono.flatMap(pos -> {
+        return Mono.just(corrected).flatMap(pos -> {
 
             // ── 2. 도착 여부 확인 ──────────────────────────────────
             if (routeService.hasArrived(sessionId, pos)) {

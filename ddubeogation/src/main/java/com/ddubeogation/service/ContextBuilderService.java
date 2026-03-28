@@ -1,6 +1,5 @@
 package com.ddubeogation.service;
 
-import com.ddubeogation.client.ElevationClient;
 import com.ddubeogation.client.OverpassClient;
 import com.ddubeogation.model.*;
 import com.ddubeogation.util.GeoUtils;
@@ -21,7 +20,6 @@ import java.util.List;
 public class ContextBuilderService {
 
     private final OverpassClient   overpassClient;
-    private final ElevationClient  elevationClient;
 
     private static final double POI_RADIUS_METERS     = 30.0;
     private static final double ARRIVAL_THRESHOLD_M   = 15.0;
@@ -31,29 +29,18 @@ public class ContextBuilderService {
             RouteStep nextStep,
             double    distanceToDestination) {
 
-        // 2가지 데이터를 병렬로 수집
-        Mono<List<Poi>> poisMono = overpassClient
+        return overpassClient
             .queryPoisNearby(position, POI_RADIUS_METERS)
             .map(pois -> enrichWithRelativePosition(pois, position))
-            .subscribeOn(Schedulers.boundedElastic());
-
-        Mono<ElevationProfile> elevMono = (nextStep != null)
-            ? elevationClient.getProfile(position, nextStep.getEndPoint())
-                             .subscribeOn(Schedulers.boundedElastic())
-            : Mono.just(flatProfile());
-
-        return Mono.zip(poisMono, elevMono)
-            .map(tuple -> NavigationContext.builder()
+            .subscribeOn(Schedulers.boundedElastic())
+            .map(pois -> NavigationContext.builder()
                 .currentPosition(position)
                 .nextStep(nextStep)
-                .nearbyPois(tuple.getT1())
-                .elevationProfile(tuple.getT2())
+                .nearbyPois(pois)
                 .distanceToDestination(distanceToDestination)
                 .isLastStep(distanceToDestination < ARRIVAL_THRESHOLD_M)
                 .build())
-            .doOnSuccess(ctx -> log.debug("[Context] pois={} grade={}%",
-                ctx.getNearbyPois().size(),
-                ctx.getElevationProfile().getGradePercent()))
+            .doOnSuccess(ctx -> log.debug("[Context] pois={}", ctx.getNearbyPois().size()))
             .onErrorReturn(buildFallbackContext(position, nextStep, distanceToDestination));
     }
 
@@ -95,13 +82,6 @@ public class ContextBuilderService {
             || cat.contains("fast_food") || cat.contains("restaurant");
     }
 
-    private ElevationProfile flatProfile() {
-        return ElevationProfile.builder()
-            .gradePercent(0.0)
-            .terrainDescription("flat")
-            .build();
-    }
-
     private NavigationContext buildFallbackContext(
             GpsPoint pos, RouteStep step, double dist) {
         log.warn("[Context] Fallback context used — external API unavailable");
@@ -109,7 +89,6 @@ public class ContextBuilderService {
             .currentPosition(pos)
             .nextStep(step)
             .nearbyPois(List.of())
-            .elevationProfile(flatProfile())
             .distanceToDestination(dist)
             .isLastStep(dist < ARRIVAL_THRESHOLD_M)
             .build();

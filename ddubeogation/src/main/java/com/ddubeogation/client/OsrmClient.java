@@ -15,8 +15,7 @@ import java.util.Map;
 /**
  * OSRM (Open Source Routing Machine) 클라이언트
  *
- * - /nearest : GPS 좌표를 가장 가까운 도로에 스냅
- * - /route   : 출발지 → 목적지 경로 및 턴-바이-턴 스텝 계산
+ * - /route : 출발지 → 목적지 경로 및 턴-바이-턴 스텝 계산
  */
 @Slf4j
 @Component
@@ -28,25 +27,6 @@ public class OsrmClient {
         this.webClient = WebClient.builder()
             .baseUrl(baseUrl)
             .build();
-    }
-
-    /**
-     * GPS 좌표를 도로 위에 스냅 (Map-Matching)
-     * HDOP가 높은 GPS 불량 구간에서 Kalman 결과를 도로에 고정
-     */
-    public Mono<GpsPoint> snapToRoad(GpsPoint point) {
-        String uri = String.format("/nearest/v1/foot/%.6f,%.6f?number=1",
-            point.getLongitude(), point.getLatitude());
-
-        return webClient.get()
-            .uri(uri)
-            .retrieve()
-            .bodyToMono(Map.class)
-            .map(res -> extractNearestPoint(res, point))
-            .onErrorReturn(point) // 실패 시 원본 반환
-            .doOnSuccess(p -> log.debug("[OSRM] Snap ({:.6f},{:.6f}) → ({:.6f},{:.6f})",
-                point.getLatitude(), point.getLongitude(),
-                p.getLatitude(), p.getLongitude()));
     }
 
     /**
@@ -66,30 +46,6 @@ public class OsrmClient {
             .map(this::extractRouteSteps)
             .onErrorReturn(List.of())
             .doOnSuccess(steps -> log.debug("[OSRM] Route has {} steps", steps.size()));
-    }
-
-    @SuppressWarnings("unchecked")
-    private GpsPoint extractNearestPoint(Map<?, ?> response, GpsPoint original) {
-        try {
-            List<?> waypoints = (List<?>) response.get("waypoints");
-            Map<?, ?> wp = (Map<?, ?>) waypoints.get(0);
-            List<?> loc = (List<?>) wp.get("location");
-            double lon = ((Number) loc.get(0)).doubleValue();
-            double lat = ((Number) loc.get(1)).doubleValue();
-            return GpsPoint.builder()
-                .latitude(lat)
-                .longitude(lon)
-                .altitude(original.getAltitude())
-                .accuracy(original.getAccuracy())
-                .hdop(original.getHdop())
-                .bearing(original.getBearing())
-                .timestamp(original.getTimestamp())
-                .mapMatched(true)
-                .build();
-        } catch (Exception e) {
-            log.warn("[OSRM] snap parse failed, returning original: {}", e.getMessage());
-            return original;
-        }
     }
 
     @SuppressWarnings("unchecked")
