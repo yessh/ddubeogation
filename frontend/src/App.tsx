@@ -106,7 +106,7 @@ export default function App() {
       const webkitHeading = (e as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
       if (webkitHeading != null) {
         setHeading(webkitHeading);
-      } else if ((e as DeviceOrientationEvent & { absolute?: boolean }).absolute && e.alpha != null) {
+      } else if (e.alpha != null) {
         setHeading((360 - e.alpha + 360) % 360);
       }
     };
@@ -348,6 +348,7 @@ export default function App() {
 
   const handleRecenter = useCallback(async () => {
     setRecenterKey((k) => k + 1);
+    setFollowGps(true);
     if (setupOrientationRef.current) {
       try {
         const perm = await (DeviceOrientationEvent as unknown as { requestPermission: () => Promise<string> }).requestPermission();
@@ -497,7 +498,7 @@ export default function App() {
         <button
           onClick={() => void handleRecenter()}
           className={`w-14 h-14 rounded-full shadow-xl flex items-center justify-center transition-colors ${
-            'bg-white text-gray-700'
+            followGps ? 'bg-blue-500 text-white' : 'bg-white text-gray-700'
           }`}
           title="현재 위치로"
         >
