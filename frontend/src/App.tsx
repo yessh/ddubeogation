@@ -434,6 +434,7 @@ export default function App() {
               isPickMode={pickMode === 'destination'}
               onActivatePickMode={() => setPickMode('destination')}
               onSelect={handleSelectDestination}
+              userLocation={gpsPosition ?? undefined}
             />
 
             {/* Route status */}

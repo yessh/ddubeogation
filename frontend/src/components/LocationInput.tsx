@@ -19,6 +19,7 @@ interface LocationInputProps {
   onGetGPS?: () => void;
   gpsLoading?: boolean;
   disabled?: boolean;
+  userLocation?: [number, number]; // [lat, lon] for nearby-first sorting
 }
 
 export function LocationInput({
@@ -31,6 +32,7 @@ export function LocationInput({
   onGetGPS,
   gpsLoading,
   disabled,
+  userLocation,
 }: LocationInputProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<PlaceResult[]>([]);
@@ -57,6 +59,9 @@ export function LocationInput({
     setSearching(true);
     try {
       const ps = new kakao.maps.services.Places();
+      const options: kakao.maps.services.PlaceSearchOptions = userLocation
+        ? { location: new kakao.maps.LatLng(userLocation[0], userLocation[1]), sort: 'distance' }
+        : {};
       ps.keywordSearch(kw, (data, status) => {
         setSearching(false);
         if (status === 'OK') {
@@ -64,11 +69,11 @@ export function LocationInput({
         } else {
           setResults([]);
         }
-      });
+      }, options);
     } catch {
       setSearching(false);
     }
-  }, []);
+  }, [userLocation]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
