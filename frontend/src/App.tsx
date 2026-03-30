@@ -252,7 +252,7 @@ export default function App() {
   }, [sessionId]);
 
   const isSessionActive = status === 'active';
-  const { lastResponse, stopPolling } =
+  const { lastResponse, startPolling, stopPolling } =
     useNavigationSession(sessionId, getRequest, isSessionActive);
 
   useNavigationNotifications(lastResponse ?? null);
@@ -328,6 +328,7 @@ export default function App() {
     });
     setSimState((prev) => ({ ...prev, lat: origin[0], lon: origin[1] }));
     setStatus('active');
+    startPolling();
   };
 
   const handleEnd = async () => {
