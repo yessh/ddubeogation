@@ -7,6 +7,9 @@ export interface DirectionGuide {
   type: number;
   guidance: string;
   name: string;
+  landmark?: string;   // nearby POI name for landmark-based turn guidance
+  subwayEnter?: string; // station name when route enters underground (TMAP only)
+  subwayExit?: number;  // exit number when route exits underground (TMAP only)
 }
 
 export interface DirectionResult {
@@ -98,17 +101,44 @@ async function fetchRouteTmap(
       }
 
       // SP/GP/EP 모두 안내 포인트로 추가
+      const description = p.description ?? '';
+      const streetName = p.streetName ?? '';
+
+      // Detect subway exit number (e.g. "8번출구", "8번 출구")
+      const exitMatch = description.match(/(\d+)\s*번\s*출구/);
+      const subwayExit = exitMatch ? parseInt(exitMatch[1]) : undefined;
+
       guides.push({
         x: lon, y: lat,
         distance: p.distance ?? 0,
         type: tmapTurnCode(p.turnType ?? 11),
-        guidance: p.description ?? '',
-        name: p.streetName ?? '',
+        guidance: description,
+        name: streetName,
+        ...(subwayExit !== undefined ? { subwayExit } : {}),
       });
     }
   }
 
   if (vertexes.length < 4) return null;
+
+  // Post-process: mark the first guide in each underground sequence as a subway entry.
+  // TMAP uses streetNames like "○○역 지하통로" or "지하보도" for underground segments.
+  const UNDERGROUND_KEYWORDS = ['지하통로', '지하역사', '지하보도', '지하상가통로'];
+  for (let i = 0; i < guides.length; i++) {
+    const curr = guides[i];
+    if (curr.subwayExit) continue; // exit points are already flagged
+    const currIsUnder = UNDERGROUND_KEYWORDS.some((kw) => curr.name.includes(kw));
+    if (!currIsUnder) continue;
+    const prev = guides[i - 1];
+    const prevIsUnder = prev
+      ? (UNDERGROUND_KEYWORDS.some((kw) => prev.name.includes(kw)) || !!prev.subwayEnter)
+      : false;
+    if (!prevIsUnder) {
+      // Extract station name from streetName (e.g. "강남역 지하통로" → "강남역")
+      const stationMatch = (curr.name + ' ' + curr.guidance).match(/[가-힣]+역/);
+      guides[i] = { ...curr, subwayEnter: stationMatch?.[0] ?? '지하철역' };
+    }
+  }
 
   console.log('[Directions] TMAP 성공 - 거리:', totalDistanceMeters + 'm');
   return { vertexes, guides, totalDistanceMeters, totalDurationSeconds };

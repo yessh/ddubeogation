@@ -7,6 +7,7 @@ import { useNavigationNotifications } from './hooks/useNavigationNotifications';
 import { useKakaoSdk } from './hooks/useKakaoSdk';
 import { startNavigation, endNavigation } from './api/navigation';
 import { fetchRoute } from './api/directions';
+import { enrichGuidesWithLandmarks } from './api/landmarks';
 import type { NavigationRequest, SessionStatus, SimState } from './types/navigation';
 import type { DirectionResult } from './api/directions';
 
@@ -256,7 +257,7 @@ export default function App() {
   const { lastResponse, startPolling, stopPolling } =
     useNavigationSession(sessionId, getRequest, isSessionActive);
 
-  useNavigationNotifications(lastResponse ?? null);
+  useNavigationNotifications(lastResponse ?? null, routeData?.guides ?? []);
 
   useEffect(() => {
     if (lastResponse?.arrived && status === 'active') {
@@ -271,6 +272,12 @@ export default function App() {
     try {
       const result = await fetchRoute(orig[0], orig[1], dest[0], dest[1]);
       setRouteData(result);
+      // Enrich turn points with nearby landmark names in the background
+      if (result) {
+        void enrichGuidesWithLandmarks(result.guides).then((enrichedGuides) => {
+          setRouteData({ ...result, guides: enrichedGuides });
+        });
+      }
     } finally {
       setRouteLoading(false);
     }
