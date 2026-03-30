@@ -257,7 +257,7 @@ export default function App() {
   const { lastResponse, startPolling, stopPolling } =
     useNavigationSession(sessionId, getRequest, isSessionActive);
 
-  useNavigationNotifications(lastResponse ?? null, routeData?.guides ?? []);
+  useNavigationNotifications(lastResponse ?? null, routeData?.guides ?? [], destAddress);
 
   useEffect(() => {
     if (lastResponse?.arrived && status === 'active') {

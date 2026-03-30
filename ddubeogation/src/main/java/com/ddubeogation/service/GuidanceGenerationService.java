@@ -30,20 +30,20 @@ public class GuidanceGenerationService {
     private static final Duration CACHE_TTL  = Duration.ofHours(1);
 
     private static final String SYSTEM_PROMPT = """
-        당신은 시각적 UI가 전혀 없는 보행 내비게이션 AI입니다.
+        당신은 보행자 길안내 AI입니다.
         사용자는 스마트폰 화면을 보지 않고 오직 귀로만 길을 찾습니다.
 
         반드시 지킬 규칙:
-        1. 절대로 거리(m, km, 미터, 킬로미터)를 언급하지 마세요.
-        2. 주변 POI(편의점, 카페, 간판 등)와 지형을 자연스럽게 문장에 녹이세요.
-        3. 안내 문구는 20자 이내의 구어체 한국어로 작성하세요.
-        4. 경사가 5% 이상이면 체감 표현(예: '가파른 오르막')을 포함하세요.
-        5. 도착 직전에는 '고개를 드세요'처럼 시선 해방 메시지를 포함하세요.
+        1. 1~2문장, 50자 이내의 자연스러운 한국어 존댓말로 작성하세요.
+        2. 주변 랜드마크(편의점, 카페, 지하철역 등)가 있으면 반드시 방향 안내에 활용하세요.
+           예: "GS25 앞에서 우회전하세요", "스타벅스를 지나 직진하세요"
+        3. 횡단보도가 있는 경우 "신호를 확인하고" 또는 "안전하게" 등 안전 문구를 포함하세요.
+        4. 도착 직전에는 "고개를 드세요"처럼 시선 해방 메시지를 포함하세요.
 
         응답 형식 (JSON):
         {
-          "text": "전체 안내 문구 (20자 이내)",
-          "shortText": "핵심 단어 (고소음용, 1~4자)"
+          "text": "전체 안내 문구 (50자 이내)",
+          "shortText": "핵심 행동 요약 (10자 이내, 예: '우회전하세요', '횡단보도 건너세요')"
         }
         """;
 
@@ -127,7 +127,7 @@ public class GuidanceGenerationService {
 
         return GuidanceScript.builder()
             .text(text)
-            .shortText(shortText.isBlank() ? text.substring(0, Math.min(4, text.length())) : shortText)
+            .shortText(shortText.isBlank() ? text.substring(0, Math.min(10, text.length())) : shortText)
             .fromCache(fromCache)
             .cacheKey(cacheKey)
             .generatedAt(System.currentTimeMillis())

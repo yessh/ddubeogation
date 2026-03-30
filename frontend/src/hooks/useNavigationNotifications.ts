@@ -9,7 +9,7 @@ const DIR_LABELS: Record<string, string> = {
   arrive: '목적지 도착',
 };
 
-// Announce thresholds in meters before the action (100m omitted — too early for pedestrians)
+// Announce thresholds in meters before the action
 const THRESHOLDS = [50, 20];
 
 function haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -29,6 +29,7 @@ function sendNotification(title: string, body: string) {
 }
 
 function speak(text: string) {
+  if (!text) return;
   if (!('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
@@ -38,9 +39,71 @@ function speak(text: string) {
   window.speechSynthesis.speak(utterance);
 }
 
+// Fallback text when backend guidance is unavailable
+function buildFallbackText(
+  triggerType: 'new_step' | 'approach_50m' | 'approach_20m',
+  step: NavigationResponse['currentStep'],
+  currentGuide: DirectionGuide | null,
+  nextGuide: DirectionGuide | null,
+): string {
+  const isTurn = step.direction === 'turn_right' || step.direction === 'turn_left';
+  const isCrossing = step.isCrossing;
+  const isArrive = step.direction === 'arrive';
+  const label = DIR_LABELS[step.direction] ?? step.direction;
+  const landmark = isTurn ? (currentGuide?.landmark ?? null) : null;
+  const subwayEnter = currentGuide?.subwayEnter ?? null;
+  const subwayExit = currentGuide?.subwayExit ?? null;
+  const nextIsLeft = nextGuide?.type === 2;
+  const nextIsRight = nextGuide?.type === 1;
+  const nextIsTurn = nextIsLeft || nextIsRight;
+  const nextTurnLabel = nextIsLeft ? '좌회전' : '우회전';
+  const shouldAdviseCross = isCrossing && !isTurn && nextIsTurn;
+
+  if (isArrive) return '목적지에 도착했습니다';
+
+  if (triggerType === 'new_step') {
+    if (subwayEnter) return `${subwayEnter}으로 들어가세요`;
+    if (subwayExit != null) return `${subwayExit}번 출구로 나오세요`;
+    if (!isTurn && !isCrossing) return '';
+
+    const distM = Math.round(step.distanceMeters);
+    if (isCrossing && isTurn) {
+      return landmark
+        ? `${distM}미터 앞 ${landmark} 횡단보도에서 ${label}하세요`
+        : `${distM}미터 앞 횡단보도에서 ${label}하세요`;
+    }
+    if (shouldAdviseCross) return `${distM}미터 앞 횡단보도입니다. 이후 ${nextTurnLabel}이 있으니 건너주세요`;
+    if (isCrossing) return `${distM}미터 앞 횡단보도입니다`;
+    if (landmark) return `${distM}미터 앞 ${landmark}에서 ${label}하세요`;
+    return `${distM}미터 앞에서 ${label}하세요`;
+  }
+
+  if (triggerType === 'approach_50m') {
+    if (isCrossing && isTurn) {
+      return landmark
+        ? `50미터 앞 ${landmark} 횡단보도에서 ${label}하세요`
+        : `50미터 앞 횡단보도에서 ${label}하세요`;
+    }
+    if (shouldAdviseCross) return `50미터 앞 횡단보도입니다. 이후 ${nextTurnLabel}이 있으니 건너주세요`;
+    if (isCrossing) return `50미터 앞 횡단보도입니다`;
+    if (landmark) return `50미터 앞 ${landmark}에서 ${label}하세요`;
+    return `50미터 앞에서 ${label}하세요`;
+  }
+
+  // approach_20m
+  if (isCrossing && isTurn) {
+    return landmark ? `${landmark} 횡단보도에서 ${label}하세요` : `횡단보도에서 ${label}하세요`;
+  }
+  if (shouldAdviseCross) return `이후 ${nextTurnLabel}이 있으니 횡단보도를 건너주세요`;
+  if (isCrossing) return '횡단보도입니다';
+  if (landmark) return `${landmark}에서 ${label}하세요`;
+  return `${label}하세요`;
+}
+
 export function useNavigationNotifications(
   response: NavigationResponse | null,
   allGuides: DirectionGuide[] = [],
+  destAddress: string = '',
 ) {
   const lastStepIndexRef = useRef<number>(-1);
   const announcedThresholdsRef = useRef<Set<number>>(new Set());
@@ -60,24 +123,34 @@ export function useNavigationNotifications(
     const isTurn = step.direction === 'turn_right' || step.direction === 'turn_left';
     const isCrossing = step.isCrossing;
     const isArrive = step.direction === 'arrive';
-    const label = DIR_LABELS[step.direction] ?? step.direction;
 
-    // Current guide: look up landmark, subway info, and next guide (for crosswalk advice)
-    const currentGuide = allGuides[step.sequenceIndex];
-    const landmark = isTurn ? (currentGuide?.landmark ?? null) : null;
-    const subwayEnter = currentGuide?.subwayEnter ?? null;
-    const subwayExit = currentGuide?.subwayExit ?? null;
+    const currentGuide = allGuides[step.sequenceIndex] ?? null;
+    const nextGuide = allGuides[step.sequenceIndex + 1] ?? null;
 
-    // Look ahead: if this is a straight crossing, check if the next guide step is a turn.
-    // GPS cannot determine which side of the road the user is on, so we advise crossing
-    // early when a turn is coming up after the crosswalk.
-    const nextGuide = allGuides[step.sequenceIndex + 1];
-    const nextIsLeft = nextGuide?.type === 2;
-    const nextIsRight = nextGuide?.type === 1;
-    const nextIsTurn = nextIsLeft || nextIsRight;
-    const nextTurnLabel = nextIsLeft ? '좌회전' : '우회전';
-    // Only advise crossing when current step is a straight crossing (not already a combined turn+crossing)
-    const shouldAdviseCross = isCrossing && !isTurn && nextIsTurn;
+    function announce(
+      triggerType: 'new_step' | 'approach_50m' | 'approach_20m',
+      notifTitle: string,
+      notifBody: string,
+    ) {
+      const guidance = response!.guidance;
+      let speechText: string;
+
+      if (triggerType === 'new_step') {
+        speechText = guidance.text || buildFallbackText(triggerType, step, currentGuide, nextGuide);
+      } else if (triggerType === 'approach_50m') {
+        speechText = guidance.shortText
+          ? `50미터 앞, ${guidance.shortText}`
+          : buildFallbackText(triggerType, step, currentGuide, nextGuide);
+      } else {
+        // approach_20m
+        speechText = guidance.shortText
+          ? `곧, ${guidance.shortText}`
+          : buildFallbackText(triggerType, step, currentGuide, nextGuide);
+      }
+
+      speak(speechText);
+      sendNotification(notifTitle, notifBody);
+    }
 
     // ── 1. New step: announce what's coming ──────────────────────────────
     if (step.sequenceIndex !== lastStepIndexRef.current) {
@@ -90,40 +163,15 @@ export function useNavigationNotifications(
         return;
       }
 
-      // ── Subway entry / exit announcements ────────────────────────────────
-      if (subwayEnter) {
-        speak(`${subwayEnter}으로 들어가세요`);
-        sendNotification('🚇 지하철역', `${subwayEnter}으로 들어가세요`);
-        return;
-      }
-      if (subwayExit !== null) {
-        speak(`${subwayExit}번 출구로 나오세요`);
-        sendNotification('🚇 출구', `${subwayExit}번 출구로 나오세요`);
-        return;
-      }
-
-      if (isTurn || isCrossing) {
+      const hasSubway = currentGuide?.subwayEnter || currentGuide?.subwayExit != null;
+      if (isTurn || isCrossing || hasSubway) {
         const distM = Math.round(step.distanceMeters);
-        let speechText: string;
-        if (isCrossing && isTurn) {
-          speechText = landmark
-            ? `${distM}미터 앞 ${landmark} 횡단보도에서 ${label}하세요`
-            : `${distM}미터 앞 횡단보도에서 ${label}하세요`;
-        } else if (shouldAdviseCross) {
-          speechText = `${distM}미터 앞 횡단보도입니다. 이후 ${nextTurnLabel}이 있으니 건너주세요`;
-        } else if (isCrossing) {
-          speechText = `${distM}미터 앞 횡단보도입니다`;
-        } else if (landmark) {
-          speechText = `${distM}미터 앞 ${landmark}에서 ${label}하세요`;
-        } else {
-          speechText = `${distM}미터 앞에서 ${label}하세요`;
-        }
-
-        speak(speechText);
-        sendNotification(
-          isCrossing ? `🚦 횡단보도 ${isTurn ? label : ''}` : label,
-          `${distM}m 앞 ${isCrossing ? '횡단보도' : label}`
-        );
+        const label = DIR_LABELS[step.direction] ?? step.direction;
+        const notifTitle = isCrossing
+          ? `🚦 횡단보도 ${isTurn ? label : ''}`.trim()
+          : label;
+        const notifBody = `${distM}m 앞 ${isCrossing ? '횡단보도' : label}`;
+        announce('new_step', notifTitle, notifBody);
       }
       return;
     }
@@ -132,62 +180,29 @@ export function useNavigationNotifications(
     if (!isTurn && !isCrossing) return;
 
     const distToEnd = haversine(
-      pos.latitude,
-      pos.longitude,
-      step.endPoint.latitude,
-      step.endPoint.longitude
+      pos.latitude, pos.longitude,
+      step.endPoint.latitude, step.endPoint.longitude,
     );
 
     for (const threshold of THRESHOLDS) {
-      // Skip thresholds larger than the step itself (avoid double-announcing)
       if (threshold >= step.distanceMeters * 0.85) continue;
       if (distToEnd > threshold) continue;
       if (announcedThresholdsRef.current.has(threshold)) continue;
 
       announcedThresholdsRef.current.add(threshold);
 
-      let speechText: string;
-      let notifTitle: string;
-      let notifBody: string;
+      const label = DIR_LABELS[step.direction] ?? step.direction;
+      const triggerType = threshold === 20 ? 'approach_20m' as const : 'approach_50m' as const;
+      const notifTitle = isCrossing ? '🚦 횡단보도' : `${label} 접근`;
+      const notifBody = threshold === 20
+        ? `곧 ${isCrossing ? '횡단보도' : label}`
+        : `${threshold}m 앞 ${isCrossing ? '횡단보도' : label}`;
 
-      if (threshold === 20) {
-        // Immediate: "곧"
-        if (isCrossing && isTurn) {
-          speechText = landmark
-            ? `${landmark} 횡단보도에서 ${label}하세요`
-            : `횡단보도에서 ${label}하세요`;
-        } else if (shouldAdviseCross) {
-          speechText = `이후 ${nextTurnLabel}이 있으니 횡단보도를 건너주세요`;
-        } else if (isCrossing) {
-          speechText = '횡단보도입니다';
-        } else if (landmark) {
-          speechText = `${landmark}에서 ${label}하세요`;
-        } else {
-          speechText = `${label}하세요`;
-        }
-        notifTitle = isCrossing ? '🚦 횡단보도' : label;
-        notifBody = `곧 ${isCrossing ? '횡단보도' : label}`;
-      } else {
-        if (isCrossing && isTurn) {
-          speechText = landmark
-            ? `${threshold}미터 앞 ${landmark} 횡단보도에서 ${label}하세요`
-            : `${threshold}미터 앞 횡단보도에서 ${label}하세요`;
-        } else if (shouldAdviseCross) {
-          speechText = `${threshold}미터 앞 횡단보도입니다. 이후 ${nextTurnLabel}이 있으니 건너주세요`;
-        } else if (isCrossing) {
-          speechText = `${threshold}미터 앞 횡단보도입니다`;
-        } else if (landmark) {
-          speechText = `${threshold}미터 앞 ${landmark}에서 ${label}하세요`;
-        } else {
-          speechText = `${threshold}미터 앞에서 ${label}하세요`;
-        }
-        notifTitle = isCrossing ? '🚦 횡단보도 접근' : `${label} 접근`;
-        notifBody = `${threshold}m 앞 ${isCrossing ? '횡단보도' : label}`;
-      }
-
-      speak(speechText);
-      sendNotification(notifTitle, notifBody);
-      break; // announce only one threshold per update tick
+      announce(triggerType, notifTitle, notifBody);
+      break;
     }
   }, [response]);
+
+  // Suppress unused variable warning — destAddress is passed for potential future use
+  void destAddress;
 }
