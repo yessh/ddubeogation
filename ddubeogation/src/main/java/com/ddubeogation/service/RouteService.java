@@ -36,6 +36,7 @@ public class RouteService {
     private final Map<String, List<RouteStep>> sessionRoutes  = new ConcurrentHashMap<>();
     private final Map<String, Integer>         sessionIndices = new ConcurrentHashMap<>();
     private final Map<String, GpsPoint>        destinations   = new ConcurrentHashMap<>();
+    private final Map<String, Boolean>         reroutedFlags  = new ConcurrentHashMap<>();
 
     public Mono<Void> initRoute(String sessionId, GpsPoint origin, GpsPoint destination) {
         destinations.put(sessionId, destination);
@@ -80,6 +81,7 @@ public class RouteService {
                     .doOnSuccess(newRoute -> {
                         sessionRoutes.put(sessionId, newRoute);
                         sessionIndices.put(sessionId, 0);
+                        reroutedFlags.put(sessionId, true);
                     })
                     .filter(steps -> !steps.isEmpty())
                     .map(steps -> steps.get(0));
@@ -99,10 +101,16 @@ public class RouteService {
         return getDistanceToDestination(sessionId, currentPos) < DEST_ARRIVAL_THRESHOLD_M;
     }
 
+    /** 재탐색 발생 여부를 확인하고 플래그를 초기화한다 (1회성) */
+    public boolean checkAndClearRerouted(String sessionId) {
+        return Boolean.TRUE.equals(reroutedFlags.remove(sessionId));
+    }
+
     public void clearSession(String sessionId) {
         sessionRoutes.remove(sessionId);
         sessionIndices.remove(sessionId);
         destinations.remove(sessionId);
+        reroutedFlags.remove(sessionId);
     }
 
     /**

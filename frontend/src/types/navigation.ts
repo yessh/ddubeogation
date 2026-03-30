@@ -67,6 +67,7 @@ export interface NavigationResponse {
   currentStep: RouteStep;
   distanceToDestination: number;
   arrived: boolean;
+  rerouted: boolean;
   sessionId: string;
 }
 

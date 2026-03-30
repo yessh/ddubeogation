@@ -89,6 +89,7 @@ export default function App() {
   const [heading, setHeading] = useState<number | null>(null);
   const [followGps, setFollowGps] = useState(true);
   const [recenterKey, setRecenterKey] = useState(0);
+  const [rerouteNotice, setRerouteNotice] = useState(false);
   const setupOrientationRef = useRef<(() => void) | null>(null);
   const gpsInitRef = useRef(false);
 
@@ -274,6 +275,17 @@ export default function App() {
       setRouteLoading(false);
     }
   }, []);
+
+  // 경로 이탈 후 재탐색 감지 → 지도 경로 업데이트
+  useEffect(() => {
+    if (!lastResponse?.rerouted || !destination) return;
+    const currentPos = gpsPosition ?? (simState ? [simState.lat, simState.lon] as [number, number] : null);
+    if (!currentPos) return;
+    setRerouteNotice(true);
+    void doFetchRoute(currentPos, destination);
+    const timer = setTimeout(() => setRerouteNotice(false), 3000);
+    return () => clearTimeout(timer);
+  }, [lastResponse?.rerouted, destination, gpsPosition, simState, doFetchRoute]);
 
   // Called when user selects origin via search or GPS
   const handleSelectOrigin = useCallback(
@@ -470,7 +482,11 @@ export default function App() {
         {/* Active nav: compact bar */}
         {status === 'active' && (
           <div className="mx-3 mt-2 flex items-center gap-3 bg-gray-900/90 backdrop-blur-md rounded-xl px-4 py-2.5 shadow-xl pointer-events-auto">
-            <span className="text-green-400 text-xs font-medium shrink-0">안내 중</span>
+            {rerouteNotice ? (
+              <span className="text-yellow-400 text-xs font-medium shrink-0 animate-pulse">경로 재탐색됨</span>
+            ) : (
+              <span className="text-green-400 text-xs font-medium shrink-0">안내 중</span>
+            )}
             <span className="text-gray-300 text-xs truncate flex-1">→ {destAddress || '목적지'}</span>
             <button
               onClick={() => void handleEnd()}

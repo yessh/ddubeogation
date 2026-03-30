@@ -15,5 +15,6 @@ public class NavigationResponse {
     private RouteStep      currentStep;
     private double         distanceToDestination;
     private boolean        arrived;
+    private boolean        rerouted;
     private String         sessionId;
 }

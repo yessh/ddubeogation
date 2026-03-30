@@ -55,8 +55,9 @@ public class NavigationOrchestrator {
                             return guidanceGen.generate(ctx)
                                 .map(script -> {
 
-                                    log.debug("[Orchestrator] session={} step={}",
-                                        sessionId, step.getDirection());
+                                    boolean rerouted = routeService.checkAndClearRerouted(sessionId);
+                                    log.debug("[Orchestrator] session={} step={} rerouted={}",
+                                        sessionId, step.getDirection(), rerouted);
 
                                     return NavigationResponse.builder()
                                         .correctedPosition(pos)
@@ -64,6 +65,7 @@ public class NavigationOrchestrator {
                                         .currentStep(step)
                                         .distanceToDestination(distToDest)
                                         .arrived(false)
+                                        .rerouted(rerouted)
                                         .sessionId(sessionId)
                                         .build();
                                 });
